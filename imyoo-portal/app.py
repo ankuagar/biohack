@@ -1063,7 +1063,7 @@ elif page == "My immune report":
         fig.add_hrect(y0=base + lo, y1=base + hi, fillcolor=GREY, opacity=0.3, line_width=0, layer="below",
                       annotation_text="typical calm day", annotation_position="top left")
         fig.add_hline(y=base + b_max, line_dash="dash", line_color=FLARE,
-                      annotation_text="red flag: above every calm sample", annotation_position="top right")
+                      annotation_text="red flag: above every calm sample", annotation_position="top left")
         fig.add_trace(go.Scatter(x=ts["day"], y=ts["b"], mode="lines", line=dict(color=GREY, width=2),
                                  showlegend=False, hoverinfo="skip"))
         for state, grp in ts.groupby("state"):
