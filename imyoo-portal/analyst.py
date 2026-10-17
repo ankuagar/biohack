@@ -65,8 +65,10 @@ TOOLS = [
                     "only people whose samples were all in one batch, or restrict to a disease (e.g. 'Crohn', "
                     "'Ulcerative').",
      "input_schema": {"type": "object", "properties": {
-         "level": {"type": "string", "enum": ["broad", "detailed", "tcell"],
-                   "description": "broad = families like B Cells; detailed = e.g. IgM Memory B Cells; tcell = T-cell subsets"},
+         "level": {"type": "string", "enum": ["family", "broad", "detailed", "tcell"],
+                   "description": "family = whole families like B Cells (subtypes added together); broad = main cell "
+                                  "types (in the newest data e.g. Naive B Cells); detailed = finest types; tcell = "
+                                  "T-cell subsets (older data only). Use list_options to see which exist."},
          "group": {"type": "string", "enum": ["Bowel disease", "Everyone", "Other"]},
          "leave_out_batch": {"type": "string", "description": "batch name like R99, or omit"},
          "same_batch_only": {"type": "boolean"},
@@ -78,7 +80,7 @@ TOOLS = [
     {"name": "cell_type_person_by_person",
      "description": "For one cell type: each person's share when feeling fine vs during flare (draws one line per person).",
      "input_schema": {"type": "object", "properties": {
-         "level": {"type": "string", "enum": ["broad", "detailed", "tcell"]},
+         "level": {"type": "string", "enum": ["family", "broad", "detailed", "tcell"]},
          "cell_type": {"type": "string"},
          "group": {"type": "string", "enum": ["Bowel disease", "Everyone", "Other"]}},
          "required": ["level", "cell_type", "group"]}},

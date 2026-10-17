@@ -19,7 +19,29 @@ FINE, FLARE = "#2b7bb9", "#e4572e"
 GREY = "#b0b7c3"
 STATE = {"Baseline": "Feeling fine", "Flaring": "Flare"}
 STATE_COLORS = {"Feeling fine": FINE, "Flare": FLARE}
-LEVEL_NAMES = {"broad": "Broad cell families", "detailed": "Detailed cell types", "tcell": "T-cell subsets"}
+LEVEL_NAMES = {"family": "Cell families", "broad": "Main cell types", "detailed": "Detailed cell types",
+               "tcell": "T-cell subsets"}
+
+
+def family_of(cell_type):
+    """Group a cell type name into its family (v3 splits e.g. B cells into naive, memory, plasma...)."""
+    import re
+    n = str(cell_type).lower()
+    if "nkt" in n or re.search(r"\bt cells?\b|t follicular|t helper|regulatory t|treg|mait|gamma.?delta", n):
+        return "T Cells"
+    if re.search(r"\bnk\b|natural killer", n):
+        return "NK Cells"
+    if "dendritic" in n or re.search(r"\b(c?dc\d?|pdc|asdc)\b", n):  # before B cells: "Plasmacytoid Dendritic"
+        return "Dendritic Cells"
+    if "plasma" in n or re.search(r"\bb cells?\b", n):
+        return "B Cells"
+    if "monocyte" in n or "macrophage" in n:
+        return "Monocytes"
+    if "progenitor" in n or "hspc" in n:
+        return "Progenitors"
+    if "proliferating" in n or "cycling" in n:
+        return "Proliferating Cells"
+    return "Other"
 JUNK = "artifact|Debris|Multiplet|Unknown|Unlabelled|Platelet"
 # cell-type colours: deliberately avoid the flare orange and feeling-fine blue
 FAMILY_COLORS = {"T Cells": "#9b8ce0", "NK Cells": "#3fb8a6", "B Cells": "#8cc63f", "Monocytes": "#f2c14e",
@@ -160,6 +182,13 @@ def _load(built_at):
     d["composition"] = c[~c["cell_type"].str.contains(JUNK, case=False)]
     m = d["cells_map"]
     d["cells_map"] = m[~m["broad"].str.contains(JUNK, case=False) & ~m["detailed"].str.contains(JUNK, case=False)]
+    d["cells_map"]["family"] = d["cells_map"]["broad"].map(family_of)
+    # Families: add subtypes back together, only when the main level is split finer than families (v3)
+    b = d["composition"][d["composition"]["level"] == "broad"].copy()
+    b["cell_type"] = b["cell_type"].map(family_of)
+    if b["cell_type"].nunique() < d["composition"].loc[d["composition"]["level"] == "broad", "cell_type"].nunique():
+        fam = b.groupby(["sample_id", "cell_type"], as_index=False)["pct"].sum().assign(level="family")
+        d["composition"] = pd.concat([d["composition"], fam], ignore_index=True)
     return d
 
 
@@ -198,7 +227,7 @@ def mark_events(fig, events, start, end):
 
 
 def type_colors(level):
-    return FAMILY_COLORS if level == "broad" else None
+    return FAMILY_COLORS if level in ("family", "broad") else None
 
 
 STEROID_WINDOWS = {"None": None, "1 day": 24, "3 days": 72, "1 week": 168, "1 month": 720}
@@ -301,7 +330,7 @@ def personal_scores(group, kind):
     s = D["samples"] if group == "Everyone" else D["samples"][D["samples"]["group"] == group]
     s = s.set_index("sample_id")
     c = D["composition"]
-    level = "broad" if kind == "bcell" else "detailed"
+    level = FAM if kind == "bcell" else "detailed"
     X = (c[c["level"] == level].pivot_table(index="sample_id", columns="cell_type", values="pct", fill_value=0)
          .reindex(s.index).fillna(0))
     if kind == "model":
@@ -352,7 +381,7 @@ def personal_family_deltas():
     """
     s = D["samples"].set_index("sample_id")
     c = D["composition"]
-    X = (c[c["level"] == "broad"].pivot_table(index="sample_id", columns="cell_type", values="pct", fill_value=0)
+    X = (c[c["level"] == FAM].pivot_table(index="sample_id", columns="cell_type", values="pct", fill_value=0)
          .reindex(s.index).fillna(0))
     calm = (s["flare"] == "Baseline").to_numpy()
     persons = s["person"].to_numpy()
@@ -535,6 +564,7 @@ def analyst_tools():
 D = load()
 INFO = D["info"]
 LEVELS = [k for k in LEVEL_NAMES if (D["composition"]["level"] == k).any()]  # detail levels this data has
+FAM = "family" if "family" in LEVELS else "broad"  # the level where B cells, T cells... are whole families
 
 # ---------- sidebar ----------
 
@@ -572,7 +602,7 @@ if page == "Home":
     who = {"Bowel disease": "bowel-disease patients", "Everyone": "everyone", "Other": "people with other conditions"}[group]
     st.subheader(f"What we found ({who})")
     found = False
-    for level, intro in [("broad", "Big picture"), ("detailed", "Zooming in")]:
+    for level, intro in [(FAM, "Big picture"), ("detailed", "Zooming in")]:
         res, _ = paired_cell_stats(level, group, ())
         if res.empty or res.iloc[0]["adjusted p"] >= 0.05:
             continue
@@ -682,7 +712,8 @@ elif page == "Flare signature":
     st.markdown("For each person who gave **both** kinds of sample, we compare their flare blood with their own "
                 "feeling-fine blood, then ask: **does the change point the same way for most people?**")
     c1, c2 = st.columns([2, 1])
-    level = c1.radio("Detail", LEVELS, format_func=LEVEL_NAMES.get, horizontal=True, index=min(1, len(LEVELS) - 1))
+    level = c1.radio("Detail", LEVELS, format_func=LEVEL_NAMES.get, horizontal=True,
+                     index=LEVELS.index(FAM) if FAM == "family" else min(1, len(LEVELS) - 1))
     runs = sorted(D["samples"]["run"].unique())
     left_out = c2.selectbox("Robustness check: leave out one lab batch", ["None"] + runs,
                             help="Re-runs the test without that batch. If a result stays coloured, "
@@ -1214,15 +1245,17 @@ elif page == "Cell map":
     if group != "Everyone":
         cells = cells[cells["group"] == group]
     c1, c2 = st.columns(2)
-    color = c1.radio("Colour by", ["Cell type", "Detailed cell type", "Flare vs feeling fine"], horizontal=True)
+    color = c1.radio("Colour by", ["Cell family", "Cell type", "Detailed cell type", "Flare vs feeling fine"],
+                     horizontal=True)
     split = c2.toggle("Show flare and feeling fine side by side", value=False)
     cells = cells.assign(state=cells["flare"].map(STATE)).reset_index(drop=True)
     cells["idx"] = cells.index
-    col = {"Cell type": "broad", "Detailed cell type": "detailed", "Flare vs feeling fine": "state"}[color]
+    col = {"Cell family": "family", "Cell type": "broad", "Detailed cell type": "detailed",
+           "Flare vs feeling fine": "state"}[color]
     fig = px.scatter(cells, x="x", y="y", color=col, facet_col="state" if split else None, custom_data=["idx"],
-                     color_discrete_map=STATE_COLORS if col == "state" else FAMILY_COLORS if col == "broad" else None,
+                     color_discrete_map=STATE_COLORS if col == "state" else FAMILY_COLORS if col in ("family", "broad") else None,
                      color_discrete_sequence=DETAIL_PALETTE,
-                     hover_data={"x": False, "y": False, "broad": True, "detailed": True, "person": True},
+                     hover_data={"x": False, "y": False, "family": True, "broad": True, "detailed": True, "person": True},
                      render_mode="webgl", labels={col: ""})
     fig.update_traces(marker=dict(size=2.5, opacity=0.6))
     fig.update_xaxes(visible=False)
@@ -1318,8 +1351,8 @@ elif page == "How we checked":
         st.markdown("Steroids are the usual treatment for flares, and they change the immune cells in blood. "
                     "Share of samples taken within a week of steroids: " +
                     ", ".join(f"**{k}** {v:.0f}%" for k, v in share.items()) + ".")
-        res_all_b, _ = paired_cell_stats("broad", group, ())
-        res_no_s, _ = paired_cell_stats("broad", group, (), steroid_hours=168)
+        res_all_b, _ = paired_cell_stats(FAM, group, ())
+        res_no_s, _ = paired_cell_stats(FAM, group, (), steroid_hours=168)
         if len(res_all_b) and len(res_no_s):
             top_ct = res_all_b.iloc[0]["cell type"]
             rows = []
@@ -1339,7 +1372,7 @@ elif page == "How we checked":
     st.markdown("Testing 20 cell types means one could look 'significant' by luck. We use the standard "
                 "Benjamini–Hochberg correction (the 'adjusted p').")
     st.subheader("✅ Does the headline hold in each disease?")
-    res_all, pairs = paired_cell_stats("detailed", "Bowel disease", ())
+    res_all, pairs = paired_cell_stats(FAM, "Bowel disease", ())
     if len(res_all):
         top = res_all.iloc[0]["cell type"]
         sub = pairs[pairs["cell_type"] == top].merge(
