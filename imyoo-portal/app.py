@@ -230,13 +230,18 @@ def type_colors(level):
     return FAMILY_COLORS if level in ("family", "broad") else None
 
 
-STEROID_WINDOWS = {"None": None, "1 day": 24, "3 days": 72, "1 week": 168, "1 month": 720}
+STEROID_WINDOWS = {"None": None, "1 day": 24, "3 days": 72, "1 week": 168, "1 month": 720,
+                   "Any recorded steroid use": float("inf")}
+STEROID_CAVEAT = ("Steroid timing was extracted by an AI from patients' answers, without human checking. A recorded "
+                  "time is probably right, but a blank can mean no steroids, not reported, or missed, so some "
+                  "steroid use may be unrecorded.")
 
 
 def paired_cell_stats(level, group, drop_runs, same_batch=False, disease=None, steroid_hours=None):
     """For each cell type: each person's flare share vs their own baseline share, tested across people.
 
-    steroid_hours: leave out samples taken within this many hours of steroids (blank = none recorded, kept).
+    steroid_hours: leave out samples taken within this many hours of RECORDED steroid use (blanks are kept: they
+    may be no steroids, or unreported/missed steroids, see STEROID_CAVEAT).
     """
     return _paired_cell_stats(level, group, drop_runs, same_batch, disease, steroid_hours, INFO.get("built"))
 
@@ -735,13 +740,16 @@ elif page == "Flare signature":
                                   "so it cancels out in the comparison.")
     steroid_win = "None"
     if "steroid_hours" in D["samples"]:
-        steroid_win = c2.selectbox("Robustness check: leave out samples taken soon after steroids",
+        steroid_win = c2.selectbox("Robustness check: leave out samples taken soon after (recorded) steroids",
                                    list(STEROID_WINDOWS),
                                    help="Steroids treat flares and change immune cells. If a result holds without "
-                                        "recently treated samples, steroids aren't what's driving it.")
+                                        "samples with recorded recent steroids, recorded steroid use isn't what's "
+                                        "driving it. " + STEROID_CAVEAT)
     res, pairs = paired_cell_stats(level, group, drop, same_batch, None, STEROID_WINDOWS[steroid_win])
     if steroid_win != "None":
-        st.caption(f"Leaving out samples taken within **{steroid_win}** of steroids.")
+        what = "with **any recorded steroid use**" if steroid_win.startswith("Any") else \
+            f"taken within **{steroid_win}** of recorded steroids"
+        st.caption(f"Leaving out samples {what}. Steroid records may be incomplete (AI-extracted, not checked).")
     if drop:
         st.caption(f"Showing results **without batch {left_out}**.")
     if res.empty:
@@ -1360,14 +1368,18 @@ elif page == "How we checked":
         recent = sg2["steroid_hours"] <= 168
         share = sg2.assign(recent=recent).groupby("state")["recent"].mean().mul(100)
         st.markdown("Steroids are the usual treatment for flares, and they change the immune cells in blood. "
-                    "Share of samples taken within a week of steroids: " +
+                    "Share of samples with **recorded** steroid use in the week before: " +
                     ", ".join(f"**{k}** {v:.0f}%" for k, v in share.items()) + ".")
+        st.caption("⚠️ " + STEROID_CAVEAT + " So this check can rule out recorded steroid use, not all steroid use.")
         res_all_b, _ = paired_cell_stats(FAM, group, ())
         res_no_s, _ = paired_cell_stats(FAM, group, (), steroid_hours=168)
+        res_none, _ = paired_cell_stats(FAM, group, (), steroid_hours=float("inf"))
         if len(res_all_b) and len(res_no_s):
             top_ct = res_all_b.iloc[0]["cell type"]
             rows = []
-            for name, r in [("All samples", res_all_b), ("Without samples within a week of steroids", res_no_s)]:
+            for name, r in [("All samples", res_all_b),
+                            ("Without samples within a week of recorded steroids", res_no_s),
+                            ("Without any sample with recorded steroid use", res_none)]:
                 row = r[r["cell type"] == top_ct]
                 if len(row):
                     row = row.iloc[0]
@@ -1376,8 +1388,8 @@ elif page == "How we checked":
                                  "average change (points)": round(row["change"], 1),
                                  "adjusted p": round(row["adjusted p"], 3)})
             st.dataframe(pd.DataFrame(rows), hide_index=True)
-            st.markdown("If the change holds in the second row, steroids aren't what's driving it. On *Flare "
-                        "signature* you can try other windows.")
+            st.markdown("If the change holds in the lower rows, **recorded** steroid use isn't what's driving it. "
+                        "On *Flare signature* you can try other windows.")
 
     st.subheader("✅ Corrected for testing many things at once")
     st.markdown("Testing 20 cell types means one could look 'significant' by luck. We use the standard "
