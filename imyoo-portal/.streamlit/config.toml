@@ -1,0 +1,14 @@
+[theme]
+primaryColor = "#e4572e"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+baseRadius = "0.75rem"
+
+[client]
+toolbarMode = "viewer"
+
+[server]
+runOnSave = true
+
+[browser]
+gatherUsageStats = false

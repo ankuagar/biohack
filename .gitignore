@@ -1,0 +1,12 @@
+# Python's automatic temporary files
+__pycache__/
+*.pyc
+
+# Data folders: the portal's data/ is made-up demo data (recreate with make_demo_data.py).
+# Real ImYoo data must never leave SPC's AWS, so no data files belong in this repo.
+data/
+*.parquet
+*.h5ad
+
+# Mac clutter
+.DS_Store
