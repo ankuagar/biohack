@@ -153,6 +153,7 @@ def load_sid():
         return None
     d = {n: pd.read_parquet(f"{folder}/{n}.parquet")
          for n in ["draws", "composition", "cells_map", "clones", "tcell_diversity", "markers", "events"]}
+    d["groups"] = pd.read_parquet(f"{folder}/groups.parquet") if os.path.exists(f"{folder}/groups.parquet") else None
     with open(f"{folder}/info.json") as f:
         d["info"] = json.load(f)
     for n in ["draws", "composition", "cells_map", "clones", "tcell_diversity"]:
@@ -1009,13 +1010,12 @@ elif page == "Sid's journey":
     span = (pd.Timestamp(si["last_draw"]) - pd.Timestamp(si["first_draw"])).days
     kpis([("🩸", si["draws"], "blood draws"), ("📅", f"{span} days", f"{si['first_draw']} → {si['last_draw']}"),
           ("🔬", f"{si['cells']:,}", "immune cells"),
-          ("✅", f"{si['tcr_called_t_pct']:.0f}%" if si.get("tcr_called_t_pct") is not None else "n/a",
-           "label check passed (see below)")])
+          ("🧩", si.get("groups", "n/a"), "groups of similar cells labelled")])
     finding("How the datasets connect",
-            "ImYoo's expert-labelled cells taught a model what each immune cell looks like, then it labelled "
-            f"**{si['cells']:,} of Sid's cells**",
+            "ImYoo's expert-labelled cells taught a model what each immune cell looks like; together with Sid's own "
+            f"T-cell receptor data it labelled **{si['cells']:,} of his cells**",
             f"Trained on {si['teaching_cells']:,} ImYoo cells and {si['genes_used']:,} genes both studies measured. "
-            f"{si['uncertain_pct']:.1f}% of Sid's cells were too uncertain to label and are left out.")
+            "Cells are labelled in groups of similar cells, using three clues (see *How we know the labels are right*).")
     events, comp = SD["events"], SD["composition"]
     start, end = comp["date"].min(), comp["date"].max()
 
@@ -1089,23 +1089,38 @@ elif page == "Sid's journey":
     chart(fig)
 
     st.subheader("How we know the labels are right")
-    c1, c2 = st.columns([1, 2])
-    if si.get("tcr_called_t_pct") is not None:
-        c1.metric("Cells with a T-cell receptor labelled 'T cell'", f"{si['tcr_called_t_pct']:.1f}%",
-                  help="Only T cells carry a T-cell receptor, so this is a check the model never saw during teaching.")
-    c1.metric("Too uncertain to label", f"{si['uncertain_pct']:.1f}%")
+    st.markdown("ImYoo and Sid's lab used **different kits**, so a model that labels cells one by one stumbles, "
+                "especially between T cells and NK cells, which look alike. So we label **groups of similar cells** "
+                "using three clues: **(1)** the share of cells carrying a **T-cell receptor** (only T cells have one), "
+                "**(2)** the model's **average vote** across the group, **(3)** **marker genes**.")
+    c = st.columns(3)
+    if si.get("model_alone_tcr_check_pct") is not None:
+        c[0].metric("Cell-by-cell model alone", f"{si['model_alone_tcr_check_pct']:.0f}%",
+                    help="Share of receptor-carrying cells the model labelled 'T cell' on its own. Too low to trust, "
+                         "which is why we label groups instead.")
+    if si.get("tcr_in_t_groups_pct") is not None:
+        c[1].metric("Receptor-carrying cells in T-cell groups", f"{si['tcr_in_t_groups_pct']:.0f}%")
+    if si.get("model_group_agreement_pct") is not None:
+        c[2].metric("Model agrees with group label", f"{si['model_group_agreement_pct']:.0f}%",
+                    help="Share of cells where the cell-by-cell model picked the same family as its group.")
+    if SD.get("groups") is not None:
+        with st.expander("How each group was labelled"):
+            gt = SD["groups"].rename(columns={"group": "group", "cells": "cells", "t_receptor_pct": "% with T-cell receptor",
+                                              "model_top": "model's top vote", "model_vote_pct": "vote %",
+                                              "label": "label", "reason": "why", "top_markers": "strongest markers"})
+            st.dataframe(gt.round(1), hide_index=True, width="stretch")
     mk = SD["markers"].set_index("predicted family")
     fig = px.imshow(mk, aspect="auto", color_continuous_scale="Oranges",
                     labels=dict(x="Marker gene", y="Labelled as", color="Activity"))
     fig.update_layout(height=320, margin=dict(t=10))
-    chart(fig, where=c2)
-    c2.caption("Each cell type should light up on its own marker genes (e.g. B cells on MS4A1 and CD79A, "
-               "T cells on CD3E, monocytes on CD14 and LYZ).")
+    chart(fig)
+    st.caption("Each cell type should light up on its own marker genes (e.g. B cells on MS4A1 and CD79A, "
+               "T cells on CD3E, monocytes on CD14 and LYZ, NK cells on NKG7 and GNLY).")
 
     st.subheader("⚠️ Keep in mind")
     st.markdown("- **One person:** this describes Sid's journey; it isn't a finding about osteosarcoma in general.\n"
-                "- **Labels are borrowed** from ImYoo (a different study, kit and disease), so fine-grained types are "
-                "less certain than broad families.\n"
+                "- **Labels are borrowed** from ImYoo (a different study, kit and disease). Broad families are checked "
+                "three ways; fine-grained types within a family are less certain.\n"
                 "- **Treatment dates aren't in the data**, so changes can't be tied to specific treatments here.")
 
 elif page == "Cell map":

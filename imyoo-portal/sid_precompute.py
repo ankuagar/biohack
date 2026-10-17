@@ -25,7 +25,8 @@ PER_TYPE = 4000        # ImYoo training cells per detailed cell type
 N_GENES = 3000         # most variable genes shared by both datasets
 N_PCS = 40
 CHUNK = 20_000         # Sid cells labelled at a time (keeps memory low)
-MIN_CONFIDENCE = 0.6   # below this, a cell is called "Uncertain"
+T_RECEPTOR_GROUP = 0.4  # a group of cells is T cells if at least this share carry a T-cell receptor
+FEW_RECEPTORS = 0.1     # below this share, a group can't be T cells (the model's T/NK mix-ups get corrected)
 N_MAP_CELLS = 60_000
 N_TOP_CLONES = 30
 MARKERS = ["CD3E", "CD8A", "MS4A1", "CD79A", "NKG7", "GNLY", "CD14", "FCGR3A", "LYZ", "FCER1A"]
@@ -150,17 +151,14 @@ def main():
 
     say("Teaching the model...")
     pca = PCA(n_components=N_PCS, random_state=0).fit(zscore(Xtr, mu_im, sd_im))
-    model = LogisticRegression(max_iter=600, C=0.5)
+    model = LogisticRegression(max_iter=1500, C=0.5)
     model.fit(pca.transform(zscore(Xtr, mu_im, sd_im)), y_detail)
     classes = model.classes_
     fam_of_class = np.array([family[c] for c in classes])
     families = sorted(set(fam_of_class))
 
     # ---- 3. label every Sid cell, a chunk at a time
-    say(f"Labelling Sid's {sid.n_obs:,} cells...")
-    detail = np.empty(sid.n_obs, dtype=object)
-    broad = np.empty(sid.n_obs, dtype=object)
-    conf = np.zeros(sid.n_obs, dtype=np.float32)
+    say(f"Scoring Sid's {sid.n_obs:,} cells with the model...")
     # markers are gene names; if Sid's file is matched by ID codes, look names up in its other columns
     sym_lookup = sid_col
     if not any(m in sid_col for m in MARKERS):
@@ -170,45 +168,74 @@ def main():
                 break
     marker_cols = [sym_lookup[m] for m in MARKERS if m in sym_lookup]
     marker_names = [m for m in MARKERS if m in sym_lookup]
-    marker_sum = {}
+    P_all = np.zeros((sid.n_obs, len(classes)), dtype=np.float32)
+    M_all = np.zeros((sid.n_obs, len(marker_cols)), dtype=np.float32)
     for start in range(0, sid.n_obs, CHUNK):
         stop = min(start + CHUNK, sid.n_obs)
         Xs = lognorm(sid.X[start:stop])
-        P = model.predict_proba(pca.transform(zscore(Xs[:, sid_idx].toarray(), mu_sid, sd_sid)))
-        fam_p = np.stack([P[:, fam_of_class == f].sum(1) for f in families], axis=1)
-        best_f = fam_p.argmax(1)
-        conf[start:stop] = fam_p[np.arange(len(P)), best_f]
-        broad[start:stop] = np.array(families)[best_f]
-        detail[start:stop] = classes[P.argmax(1)]
-        M = Xs[:, marker_cols].toarray()
-        for f in families:  # running marker averages per predicted family, for the "are labels right?" check
-            rows = broad[start:stop] == f
-            if rows.any():
-                s, n = marker_sum.get(f, (np.zeros(len(marker_cols)), 0))
-                marker_sum[f] = (s + M[rows].sum(0), n + rows.sum())
+        P_all[start:stop] = model.predict_proba(pca.transform(zscore(Xs[:, sid_idx].toarray(), mu_sid, sd_sid)))
+        M_all[start:stop] = Xs[:, marker_cols].toarray()
         say(f"  {stop:,} / {sid.n_obs:,}")
-    uncertain = conf < MIN_CONFIDENCE
-    broad[uncertain] = "Uncertain"
-    detail[uncertain] = "Uncertain"
+
+    # ---- 3b. label GROUPS of similar cells (Sid's own clusters), using three clues per group:
+    #  1) share of cells carrying a T-cell receptor (a hard fact), 2) the model's average vote, 3) marker genes
+    say("Labelling groups of similar cells...")
+    obs = sid.obs
+    fam_p = np.stack([P_all[:, fam_of_class == f].sum(1) for f in families], axis=1)
+    fams = np.array(families)
+    model_broad = fams[fam_p.argmax(1)]
+    tcr_lab = text(obs["TCR_label"]) if "TCR_label" in obs else np.full(sid.n_obs, "none")
+    has_tcr = np.isin(tcr_lab, ["alpha_beta", "gamma_delta"])
+    groups = text(obs["seurat_clusters"]) if "seurat_clusters" in obs else model_broad
+    broad = np.empty(sid.n_obs, dtype=object)
+    detail = np.empty(sid.n_obs, dtype=object)
+    rows = []
+    for g in sorted(np.unique(groups), key=lambda x: (len(x), x)):
+        m = groups == g
+        t_share = has_tcr[m].mean()
+        vote = fam_p[m].mean(0)
+        ranked = [fams[i] for i in np.argsort(-vote)]
+        if t_share >= T_RECEPTOR_GROUP:
+            label, reason = "T Cells", f"{t_share:.0%} carry a T-cell receptor"
+        else:
+            allowed = [f for f in ranked if not (f == "T Cells" and t_share < FEW_RECEPTORS)]
+            label = allowed[0]
+            reason = f"model vote {vote[families.index(label)]:.0%}"
+            if ranked[0] == "T Cells" and label != "T Cells":
+                reason += f"; not T cells (only {t_share:.0%} carry a T-cell receptor)"
+        broad[m] = label
+        own = fam_of_class == label  # detailed type: best match within the group's family
+        detail[m] = classes[own][P_all[m][:, own].argmax(1)] if own.any() else label
+        mk = M_all[m].mean(0)
+        rows.append({"group": g, "cells": int(m.sum()), "t_receptor_pct": 100 * t_share,
+                     "model_top": ranked[0], "model_vote_pct": 100 * vote.max(), "label": label, "reason": reason,
+                     "top_markers": ", ".join(marker_names[i] for i in np.argsort(-mk)[:3])})
+    groups_table = pd.DataFrame(rows)
+    groups_table.to_parquet(f"{args.out}/groups.parquet", index=False)
+    print(groups_table.to_string(index=False))
+    marker_sum = {f: (M_all[broad == f].sum(0), int((broad == f).sum())) for f in np.unique(broad)}
+    model_t_check = float(100 * (model_broad[has_tcr] == "T Cells").mean()) if has_tcr.any() else None
+    agreement = float(100 * (model_broad == broad).mean())
+    del P_all, M_all
 
     # ---- 4. summaries for the portal
-    obs = sid.obs
-    date = pd.to_datetime(text(obs["date"]), errors="coerce")
+    raw_dates = pd.Series(text(obs["date"]))
+    print("Blood draw dates in the file:", raw_dates.value_counts().sort_index().to_dict())
+    date = pd.to_datetime(raw_dates, errors="coerce")
     first = date.min()
-    cells = pd.DataFrame({"date": date, "broad": broad, "detailed": detail, "confidence": conf,
+    cells = pd.DataFrame({"date": date, "broad": broad, "detailed": detail,
                           "tcr": text(obs["TCR_label"]) if "TCR_label" in obs else "none",
                           "clone": text(obs["clone_TRB"]) if "clone_TRB" in obs else "NA_NA_NA"})
     cells["day"] = (cells["date"] - first).dt.days
 
-    draws = cells.groupby("date").agg(day=("day", "first"), n_cells=("broad", "size"),
-                                      uncertain_pct=("broad", lambda b: 100 * (b == "Uncertain").mean())).reset_index()
+    draws = cells.groupby("date").agg(day=("day", "first"), n_cells=("broad", "size")).reset_index()
     if "biological_sample" in obs:
         draws["sample"] = pd.Series(text(obs["biological_sample"])).groupby(cells["date"].values).agg(
             lambda x: ", ".join(sorted(set(x)))).reindex(draws["date"]).to_numpy()
     draws.to_parquet(f"{args.out}/draws.parquet", index=False)
 
     comp = []
-    known = cells[cells["broad"] != "Uncertain"]
+    known = cells.dropna(subset=["date"])
     for level in ["broad", "detailed"]:
         pct = pd.crosstab(known["date"], known[level], normalize="index").mul(100).stack().rename("pct").reset_index()
         pct.columns = ["date", "cell_type", "pct"]
@@ -241,7 +268,6 @@ def main():
     clones.to_parquet(f"{args.out}/clones.parquet", index=False)
 
     tcr_cells = cells[cells["tcr"].isin(["alpha_beta", "gamma_delta"])]
-    labelled_tcr = tcr_cells[tcr_cells["broad"] != "Uncertain"]
     markers = pd.DataFrame({f: s / max(n, 1) for f, (s, n) in marker_sum.items()}, index=marker_names).T
     markers.reset_index(names="predicted family").to_parquet(f"{args.out}/markers.parquet", index=False)
 
@@ -256,15 +282,17 @@ def main():
     info = {
         "built": time.strftime("%Y-%m-%d %H:%M"), "cells": int(sid.n_obs), "draws": int(draws["date"].nunique()),
         "first_draw": str(first.date()), "last_draw": str(date.max().date()),
-        "teaching_cells": int(len(pick)), "genes_used": len(genes), "min_confidence": MIN_CONFIDENCE,
-        "uncertain_pct": float(100 * uncertain.mean()),
+        "teaching_cells": int(len(pick)), "genes_used": len(genes), "groups": int(len(groups_table)),
         "tcr_cells": int(len(tcr_cells)),
-        "tcr_called_t_pct": float(100 * (labelled_tcr["broad"] == "T Cells").mean()) if len(labelled_tcr) else None,
+        "tcr_in_t_groups_pct": float(100 * (tcr_cells["broad"] == "T Cells").mean()) if len(tcr_cells) else None,
+        "model_alone_tcr_check_pct": model_t_check, "model_group_agreement_pct": agreement,
+        "dates_unreadable": int(date.isna().sum()),
     }
     with open(f"{args.out}/info.json", "w") as f:
         json.dump(info, f, indent=2)
-    say("Done. " + ", ".join(f"{k}={v}" for k, v in info.items() if k in ("cells", "draws", "uncertain_pct",
-                                                                         "tcr_called_t_pct")))
+    say("Done. " + ", ".join(f"{k}={v:.1f}" if isinstance(v, float) else f"{k}={v}" for k, v in info.items()
+                             if k in ("cells", "draws", "groups", "tcr_in_t_groups_pct", "model_alone_tcr_check_pct",
+                                      "model_group_agreement_pct", "dates_unreadable")))
     for name in sorted(os.listdir(args.out)):
         print(f"   {name:24s} {os.path.getsize(os.path.join(args.out, name)) / 1e6:6.2f} MB")
 
