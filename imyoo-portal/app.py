@@ -1003,85 +1003,118 @@ elif page == "My immune report":
         st.markdown("\n".join(f"- {f}" for f in facts))
 
 elif page == "Sid's journey":
-    header("Sid's journey: one patient's immune system through cancer treatment",
+    header("Sid's journey: one patient's T cells through cancer treatment",
            "Sid Sijbrandij openly shared his osteosarcoma data to advance cancer research. Here we follow the "
-           "**immune cells in his blood** across his treatment, using the tools we built for ImYoo.")
+           "**T cells in his blood** across a year of treatment, using the tools we built for ImYoo.")
     SD = load_sid()
     if SD is None:
         st.info("Sid's summaries aren't built yet. In SageMaker run `python sid_precompute.py` (see README), "
                 "then refresh this page.")
         st.stop()
-    si = SD["info"]
+    si, events, comp = SD["info"], SD["events"], SD["composition"]
+    dv, cl, draws = SD["tcell_diversity"], SD["clones"], SD["draws"].dropna(subset=["date"])
+    start, end = comp["date"].min(), comp["date"].max()
     span = (pd.Timestamp(si["last_draw"]) - pd.Timestamp(si["first_draw"])).days
+    broad = comp[comp["level"] == "broad"]
+    t_share = broad[broad["cell_type"] == "T Cells"]["pct"].mean() if (broad["cell_type"] == "T Cells").any() else 0
     kpis([("🩸", si["draws"], "blood draws"), ("📅", f"{span} days", f"{si['first_draw']} → {si['last_draw']}"),
           ("🔬", f"{si['cells']:,}", "immune cells"),
-          ("🧩", si.get("groups", "n/a"), "groups of similar cells labelled")])
-    finding("How the datasets connect",
-            "ImYoo's expert-labelled cells taught a model what each immune cell looks like; together with Sid's own "
-            f"T-cell receptor data it labelled **{si['cells']:,} of his cells**",
-            f"Trained on {si['teaching_cells']:,} ImYoo cells and {si['genes_used']:,} genes both studies measured. "
-            "Cells are labelled in groups of similar cells, using three clues (see *How we know the labels are right*).")
-    events, comp = SD["events"], SD["composition"]
-    start, end = comp["date"].min(), comp["date"].max()
-
-    st.subheader("His immune mix at each blood draw")
-    level = st.radio("Detail", ["broad", "detailed"], format_func={"broad": "Broad cell families",
-                                                                  "detailed": "Detailed cell types"}.get,
-                     horizontal=True, key="sid_level")
-    c = comp[comp["level"] == level]
-    fig = px.area(c.sort_values("date"), x="date", y="pct", color="cell_type", markers=True,
-                  color_discrete_map=type_colors(level), color_discrete_sequence=DETAIL_PALETTE,
-                  labels={"date": "", "pct": "% of immune cells", "cell_type": "Cell type"})
-    mark_events(fig, events, start, end)
-    fig.update_layout(height=460, legend=dict(orientation="h", y=-0.15))
-    chart(fig)
-    st.caption("Dots are blood draws. Dashed lines mark tumour samples taken in the same period (from the "
-               "study's catalogue). Treatment dates aren't in the data, so they're not shown.")
-
-    st.subheader("Compared with his first blood draw")
-    b = comp[comp["level"] == "broad"].pivot(index="date", columns="cell_type", values="pct").sort_index()
-    delta = (b - b.iloc[0]).reset_index().melt(id_vars="date", var_name="cell_type", value_name="change")
-    main_fams = b.mean().sort_values(ascending=False).head(5).index
-    fig = px.line(delta[delta["cell_type"].isin(main_fams)], x="date", y="change", color="cell_type", markers=True,
-                  color_discrete_map=FAMILY_COLORS,
-                  labels={"date": "", "change": "Change vs first draw (percentage points)", "cell_type": ""})
-    fig.add_hline(y=0, line_color=avg_color(), line_width=1)
-    mark_events(fig, events, start, end)
-    fig.update_layout(height=400)
-    chart(fig)
-    biggest = delta[delta["date"] == delta["date"].max()].set_index("cell_type")["change"]
-    biggest = biggest[biggest.index.isin(main_fams)]
-    if len(biggest):
-        up, down = biggest.idxmax(), biggest.idxmin()
-        st.markdown(f"By the last draw, **{up}** are {biggest[up]:+.1f} points and **{down}** {biggest[down]:+.1f} "
-                    "points compared with his first draw.")
-    st.caption("His first draw (days before a tumour biopsy) is the reference, so this shows change during "
-               "treatment, not a comparison with healthy people.")
+          ("🧬", f"{int(dv['t_cells_with_receptor'].sum()):,}", "T cells with a receptor barcode")])
+    if t_share > 85:
+        finding("What this blood collection is",
+                f"Almost all of Sid's cells are **T cells (about {t_share:.0f}%)**, compared with about half in "
+                "typical blood",
+                "So this collection appears to be focused on T cells. That makes it ideal for following T-cell "
+                "families over time, but the overall cell mix mostly reflects how samples were collected, not biology.",
+                quiet=True)
 
     st.subheader("T-cell families over time")
     st.markdown("Each T cell carries a receptor 'barcode', and cells with the same barcode belong to one **family**. "
-                "When the immune system responds to something, particular families **multiply**.")
-    dv, cl = SD["tcell_diversity"], SD["clones"]
+                "When the immune system responds to something (an infection, a tumour, a treatment), particular "
+                "families **multiply**. Dashed lines mark tumour samples taken in the same period.")
     c1, c2 = st.columns([2, 1])
     top_n = c2.slider("Families to show", 3, 15, 8)
     order = cl.groupby("family")["pct"].max().sort_values(ascending=False).index[:top_n]
-    fig = px.line(cl[cl["family"].isin(order)], x="date", y="pct", color="family", markers=True,
-                  hover_data={"clone": True},
-                  labels={"date": "", "pct": "% of his T cells", "family": ""})
+    fig = px.line(cl[cl["family"].isin(order)].sort_values("date"), x="date", y="pct", color="family", markers=True,
+                  hover_data={"clone": True}, labels={"date": "", "pct": "% of his T cells", "family": ""})
     mark_events(fig, events, start, end)
-    fig.update_layout(height=400)
+    fig.update_layout(height=420)
     chart(fig, where=c1)
-    fig = px.line(dv, x="date", y="effective_families", markers=True,
+    fig = px.line(dv.sort_values("date"), x="date", y="effective_families", markers=True,
                   labels={"date": "", "effective_families": "Effective number of families"})
     fig.update_traces(line_color=FINE)
-    fig.update_layout(height=260, margin=dict(t=10))
+    mark_events(fig, events, start, end)
+    fig.update_layout(height=280, margin=dict(t=30))
     chart(fig, where=c2)
     c2.caption("Falls when a few families take over (a focused response), rises when many share the space.")
 
+    st.subheader("Which families grew or shrank?")
+    in_range = events[(events["date"] > start) & (events["date"] < end)]
+    split_opts = {f"{r['label']} ({r['date']:%Y-%m-%d})": r["date"] for _, r in in_range.iterrows()}
+    split_opts["Halfway through the draws"] = start + (end - start) / 2
+    c1, c2 = st.columns([2, 1])
+    split_name = c1.selectbox("Compare blood draws before and after", list(split_opts))
+    split = split_opts[split_name]
+    before, after = cl[cl["date"] < split], cl[cl["date"] > split]
+    if before["date"].nunique() and after["date"].nunique():
+        ba = pd.DataFrame({"before": before.groupby("family")["pct"].mean(),
+                           "after": after.groupby("family")["pct"].mean()}).fillna(0)
+        ba["change"] = ba["after"] - ba["before"]
+        ba = ba.loc[ba["change"].abs().sort_values(ascending=False).index[:12]].sort_values("change")
+        ba["direction"] = np.where(ba["change"] > 0, "Grew after", "Shrank after")
+        fig = px.bar(ba.reset_index(), x="change", y="family", orientation="h", color="direction",
+                     color_discrete_map={"Grew after": FLARE, "Shrank after": FINE},
+                     hover_data={"before": ":.2f", "after": ":.2f"},
+                     labels={"change": "Change in share of his T cells (percentage points)", "family": ""})
+        fig.update_layout(height=420, legend_title_text="")
+        chart(fig, where=c1)
+        nb, na = before["date"].nunique(), after["date"].nunique()
+        c2.metric("Draws before", nb)
+        c2.metric("Draws after", na)
+        grew = ba[ba["change"] > 0]
+        if len(grew):
+            g = grew["change"].idxmax()
+            c2.markdown(f"Biggest grower: **{g}**, from {ba.loc[g, 'before']:.2f}% to {ba.loc[g, 'after']:.2f}% of his "
+                        "T cells.")
+        c2.caption("Averages of the draws on each side. One person, so this describes his response; it can't say "
+                   "what caused it.")
+    else:
+        st.info("Need blood draws on both sides of that date.")
+
+    st.subheader("Blood draws")
+    fig = px.bar(draws.sort_values("date"), x="date", y="n_cells", labels={"date": "", "n_cells": "cells"})
+    fig.update_traces(marker_color=GREY)
+    mark_events(fig, events, start, end)
+    fig.update_layout(height=260, margin=dict(t=30))
+    chart(fig)
+    notes = []
+    if si.get("dates_unreadable"):
+        notes.append(f"{si['dates_unreadable']:,} cells have no date in the file (they come from a separately named "
+                     "sample) and are left out of the timeline.")
+    groups = SD.get("groups")
+    if groups is not None and (groups["group"] == "").any():
+        n_nog = int(groups.loc[groups["group"] == "", "cells"].sum())
+        notes.append(f"{n_nog:,} cells have no group in the file; they were labelled together as one group.")
+    if notes:
+        st.caption(" ".join(notes))
+
+    with st.expander("Overall cell mix at each draw (read with care)"):
+        st.caption("Because the collection is focused on T cells, these shares mostly reflect how samples were "
+                   "collected, not changes in his blood.")
+        level = st.radio("Detail", ["broad", "detailed"], horizontal=True, key="sid_level",
+                         format_func={"broad": "Broad cell families", "detailed": "Detailed cell types"}.get)
+        c = comp[comp["level"] == level]
+        fig = px.area(c.sort_values("date"), x="date", y="pct", color="cell_type", markers=True,
+                      color_discrete_map=type_colors(level), color_discrete_sequence=DETAIL_PALETTE,
+                      labels={"date": "", "pct": "% of immune cells", "cell_type": "Cell type"})
+        mark_events(fig, events, start, end)
+        fig.update_layout(height=420, legend=dict(orientation="h", y=-0.15))
+        chart(fig)
+
     st.subheader("His cell map")
-    cm = SD["cells_map"].copy()
+    cm = SD["cells_map"].dropna(subset=["date"]).copy()
     cm["draw"] = cm["date"].dt.strftime("%Y-%m-%d")
-    colour = st.radio("Colour by", ["Cell type", "Detailed cell type", "Blood draw"], horizontal=True, key="sid_map")
+    colour = st.radio("Colour by", ["Blood draw", "Cell type", "Detailed cell type"], horizontal=True, key="sid_map")
     col = {"Cell type": "broad", "Detailed cell type": "detailed", "Blood draw": "draw"}[colour]
     fig = px.scatter(cm, x="x", y="y", color=col, render_mode="webgl",
                      color_discrete_map=FAMILY_COLORS if col == "broad" else None,
@@ -1093,40 +1126,39 @@ elif page == "Sid's journey":
     fig.update_layout(height=600, legend=dict(itemsizing="constant"))
     chart(fig)
 
-    st.subheader("How we know the labels are right")
-    st.markdown("ImYoo and Sid's lab used **different kits**, so a model that labels cells one by one stumbles, "
-                "especially between T cells and NK cells, which look alike. So we label **groups of similar cells** "
-                "using three clues: **(1)** the share of cells carrying a **T-cell receptor** (only T cells have one), "
-                "**(2)** the model's **average vote** across the group, **(3)** **marker genes**.")
+    st.subheader("How the cells were labelled (honestly)")
+    st.markdown("Sid's file has no cell-type labels. We first tried teaching a model on **ImYoo's expert-labelled "
+                "cells** and applying it to Sid's. But the two labs used **different kits**, and on its own the model "
+                "wasn't reliable. So each **group of similar cells** is labelled with three clues: **(1)** the share "
+                "carrying a **T-cell receptor** (only T cells have one; this did most of the work), **(2)** the "
+                "model's **average vote**, **(3)** **marker genes**.")
     c = st.columns(3)
     if si.get("model_alone_tcr_check_pct") is not None:
-        c[0].metric("Cell-by-cell model alone", f"{si['model_alone_tcr_check_pct']:.0f}%",
-                    help="Share of receptor-carrying cells the model labelled 'T cell' on its own. Too low to trust, "
-                         "which is why we label groups instead.")
+        c[0].metric("ImYoo model alone: receptor cells called T", f"{si['model_alone_tcr_check_pct']:.0f}%",
+                    help="Too low to trust, which is why we label groups using the T-cell receptors.")
     if si.get("tcr_in_t_groups_pct") is not None:
         c[1].metric("Receptor-carrying cells in T-cell groups", f"{si['tcr_in_t_groups_pct']:.0f}%")
     if si.get("model_group_agreement_pct") is not None:
-        c[2].metric("Model agrees with group label", f"{si['model_group_agreement_pct']:.0f}%",
-                    help="Share of cells where the cell-by-cell model picked the same family as its group.")
-    if SD.get("groups") is not None:
+        c[2].metric("Model agrees with group label", f"{si['model_group_agreement_pct']:.0f}%")
+    st.caption("Lesson for future work: carrying labels across different lab kits needs stronger methods that line "
+               "the datasets up first. T-cell receptor barcodes were the reliable anchor here.")
+    if groups is not None:
         with st.expander("How each group was labelled"):
-            gt = SD["groups"].rename(columns={"group": "group", "cells": "cells", "t_receptor_pct": "% with T-cell receptor",
-                                              "model_top": "model's top vote", "model_vote_pct": "vote %",
-                                              "label": "label", "reason": "why", "top_markers": "strongest markers"})
+            gt = groups.assign(group=groups["group"].replace("", "(no group in file)")).rename(columns={
+                "t_receptor_pct": "% with T-cell receptor", "model_top": "model's top vote", "model_vote_pct": "vote %",
+                "reason": "why", "top_markers": "strongest markers"})
             st.dataframe(gt.round(1), hide_index=True, width="stretch")
     mk = SD["markers"].set_index("predicted family")
     fig = px.imshow(mk, aspect="auto", color_continuous_scale="Oranges",
                     labels=dict(x="Marker gene", y="Labelled as", color="Activity"))
-    fig.update_layout(height=320, margin=dict(t=10))
+    fig.update_layout(height=280, margin=dict(t=10))
     chart(fig)
-    st.caption("Each cell type should light up on its own marker genes (e.g. B cells on MS4A1 and CD79A, "
-               "T cells on CD3E, monocytes on CD14 and LYZ, NK cells on NKG7 and GNLY).")
 
     st.subheader("⚠️ Keep in mind")
     st.markdown("- **One person:** this describes Sid's journey; it isn't a finding about osteosarcoma in general.\n"
-                "- **Labels are borrowed** from ImYoo (a different study, kit and disease). Broad families are checked "
-                "three ways; fine-grained types within a family are less certain.\n"
-                "- **Treatment dates aren't in the data**, so changes can't be tied to specific treatments here.")
+                "- **A T-cell-focused collection:** the overall cell mix can't be read as changes in his blood.\n"
+                "- **Treatment dates aren't in the data**, so changes can't be tied to specific treatments, only "
+                "placed relative to his tumour sampling dates.")
 
 elif page == "Cell map":
     header("A map of every kind of immune cell")
