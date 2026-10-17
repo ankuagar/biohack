@@ -131,8 +131,26 @@ def sample_labels(s):
 
 # ---------- data ----------
 
-@st.cache_data
+@st.cache_resource
+def _last_build():
+    return {"built_at": None}
+
+
 def load():
+    """ImYoo summaries, re-read automatically whenever precompute.py rebuilds them.
+
+    A rebuild also wipes every remembered result (scores, comparisons) so nothing stale is shown.
+    """
+    built_at = os.path.getmtime(f"{DATA}/info.json")
+    seen = _last_build()
+    if seen["built_at"] not in (None, built_at):
+        st.cache_data.clear()
+    seen["built_at"] = built_at
+    return _load(built_at)
+
+
+@st.cache_data
+def _load(built_at):
     d = {name: pd.read_parquet(f"{DATA}/{name}.parquet")
          for name in ["samples", "composition", "cells_map", "pseudobulk", "gene_tests"]}
     with open(f"{DATA}/info.json") as f:
@@ -183,10 +201,22 @@ def type_colors(level):
     return FAMILY_COLORS if level == "broad" else None
 
 
+STEROID_WINDOWS = {"None": None, "1 day": 24, "3 days": 72, "1 week": 168, "1 month": 720}
+
+
+def paired_cell_stats(level, group, drop_runs, same_batch=False, disease=None, steroid_hours=None):
+    """For each cell type: each person's flare share vs their own baseline share, tested across people.
+
+    steroid_hours: leave out samples taken within this many hours of steroids (blank = none recorded, kept).
+    """
+    return _paired_cell_stats(level, group, drop_runs, same_batch, disease, steroid_hours, INFO.get("built"))
+
+
 @st.cache_data
-def paired_cell_stats(level, group, drop_runs, same_batch=False, disease=None):
-    """For each cell type: each person's flare share vs their own baseline share, tested across people."""
+def _paired_cell_stats(level, group, drop_runs, same_batch, disease, steroid_hours, built):
     s = D["samples"]
+    if steroid_hours and "steroid_hours" in s:
+        s = s[~(s["steroid_hours"] <= steroid_hours)]
     if group != "Everyone":
         s = s[s["group"] == group]
     if disease:
@@ -426,11 +456,15 @@ def analyst_tools():
                  "flare_samples": int((s["flare"] == "Flaring").sum()),
                  "calm_samples": int((s["flare"] == "Baseline").sum()),
                  "people_with_both": int(s.groupby("person")["flare"].nunique().eq(2).sum()),
+                 "flare_samples_within_week_of_steroids": int(((s["flare"] == "Flaring") & (s.get("steroid_hours", pd.Series(dtype=float)) <= 168)).sum()) if "steroid_hours" in s else None,
+                 "median_age": float(s.groupby("person")["age"].first().median()) if "age" in s else None,
                  "conditions": s.groupby("disease")["person"].nunique().to_dict()}, None)
 
-    def compare_cell_types(level, group, leave_out_batch=None, same_batch_only=False, disease=None):
+    def compare_cell_types(level, group, leave_out_batch=None, same_batch_only=False, disease=None,
+                           exclude_within_hours_of_steroids=None):
         drop = (leave_out_batch,) if leave_out_batch else ()
-        res, _ = paired_cell_stats(level, group, drop, bool(same_batch_only), disease)
+        res, _ = paired_cell_stats(level, group, drop, bool(same_batch_only), disease,
+                                   exclude_within_hours_of_steroids)
         if res.empty:
             return {"note": "Not enough people with both flare and calm samples for this selection."}, None
         passing = res[res["adjusted p"] < 0.05]["cell type"].tolist()
@@ -578,7 +612,10 @@ elif page == "The study":
                 f"**<span style='color:{FINE}'>blue = feeling fine</span>**.", unsafe_allow_html=True)
     s = samples_g.sort_values("person")
     fig = px.scatter(s, x="day", y="person", color="state", color_discrete_map=STATE_COLORS, custom_data=["sample_id"],
-                     size="n_cells", size_max=16, hover_data={"disease": True, "n_cells": ":,", "day": ":.0f"},
+                     size="n_cells", size_max=16,
+                     hover_data={"disease": True, "n_cells": ":,", "day": ":.0f",
+                                 **({"age": ":.0f"} if "age" in s else {}),
+                                 **({"steroid_hours": ":.0f"} if "steroid_hours" in s else {})},
                      labels={"day": "Days since this person's first sample", "person": "", "state": ""})
     fig.update_yaxes(categoryorder="category descending")
     fig.update_layout(height=max(400, 22 * s["person"].nunique()), legend=dict(orientation="h", y=1.05),
@@ -653,14 +690,22 @@ elif page == "Flare signature":
     same_batch = c2.checkbox("Only people whose samples were all processed in one batch",
                              help="For these people, any batch quirk hits their flare and calm samples equally, "
                                   "so it cancels out in the comparison.")
-    res, pairs = paired_cell_stats(level, group, drop, same_batch)
+    steroid_win = "None"
+    if "steroid_hours" in D["samples"]:
+        steroid_win = c2.selectbox("Robustness check: leave out samples taken soon after steroids",
+                                   list(STEROID_WINDOWS),
+                                   help="Steroids treat flares and change immune cells. If a result holds without "
+                                        "recently treated samples, steroids aren't what's driving it.")
+    res, pairs = paired_cell_stats(level, group, drop, same_batch, None, STEROID_WINDOWS[steroid_win])
+    if steroid_win != "None":
+        st.caption(f"Leaving out samples taken within **{steroid_win}** of steroids.")
     if drop:
         st.caption(f"Showing results **without batch {left_out}**.")
     if res.empty:
         st.warning("Not enough people with both kinds of sample for this selection.")
         st.stop()
     event = chart(signature_bar(res), on_select="rerun", selection_mode="points",
-                  key=f"sig_bar_{level}_{group}_{left_out}_{same_batch}")
+                  key=f"sig_bar_{level}_{group}_{left_out}_{same_batch}_{steroid_win}")
     st.caption("Coloured bars pass a strict test (adjusted p < 0.05, corrected for testing many cell types). "
                "Labels show how many people had more of that cell type during their flare. "
                "👆 Click a bar to see it person by person.")
@@ -1264,6 +1309,31 @@ elif page == "How we checked":
     ft = s.groupby("state")["freezer_days"].median()
     st.markdown("Median days in the freezer before processing: " +
                 ", ".join(f"**{k}** {v:.0f}" for k, v in ft.items()) + ".")
+    if "steroid_hours" in s:
+        st.subheader("✅ Is it the flare, or the steroids?")
+        sg2 = s if group == "Everyone" else s[s["group"] == group]
+        recent = sg2["steroid_hours"] <= 168
+        share = sg2.assign(recent=recent).groupby("state")["recent"].mean().mul(100)
+        st.markdown("Steroids are the usual treatment for flares, and they change the immune cells in blood. "
+                    "Share of samples taken within a week of steroids: " +
+                    ", ".join(f"**{k}** {v:.0f}%" for k, v in share.items()) + ".")
+        res_all_b, _ = paired_cell_stats("broad", group, ())
+        res_no_s, _ = paired_cell_stats("broad", group, (), steroid_hours=168)
+        if len(res_all_b) and len(res_no_s):
+            top_ct = res_all_b.iloc[0]["cell type"]
+            rows = []
+            for name, r in [("All samples", res_all_b), ("Without samples within a week of steroids", res_no_s)]:
+                row = r[r["cell type"] == top_ct]
+                if len(row):
+                    row = row.iloc[0]
+                    rows.append({"samples used": name, "people": int(row["people"]),
+                                 f"{top_ct}: people going up": int(row["people up"]),
+                                 "average change (points)": round(row["change"], 1),
+                                 "adjusted p": round(row["adjusted p"], 3)})
+            st.dataframe(pd.DataFrame(rows), hide_index=True)
+            st.markdown("If the change holds in the second row, steroids aren't what's driving it. On *Flare "
+                        "signature* you can try other windows.")
+
     st.subheader("✅ Corrected for testing many things at once")
     st.markdown("Testing 20 cell types means one could look 'significant' by luck. We use the standard "
                 "Benjamini–Hochberg correction (the 'adjusted p').")

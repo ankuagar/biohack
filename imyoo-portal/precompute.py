@@ -16,7 +16,7 @@ from scipy import sparse
 from scipy.stats import t as t_dist
 from statsmodels.stats.multitest import multipletests
 
-H5AD = os.path.expanduser("~/data/imyoo_spc_biohackathon_20261016T004303Z.h5ad")
+H5AD = os.path.expanduser("~/data/imyoo_spc_biohackathon_20261017T211331Z.h5ad")  # v3 (v1 is dummy data)
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 JUNK = "Debris|Multiplet|artifact|Unknown|Platelet"
@@ -43,7 +43,7 @@ def build_samples(obs):
     """One row per sample, with people renamed P01..P29 (no real IDs on screen)."""
     people = sorted(obs["participant_id"].astype(str).unique())
     alias = {p: f"P{i + 1:02d}" for i, p in enumerate(people)}
-    s = obs.groupby("sample_id", observed=True).agg(
+    cols = dict(
         person=("participant_id", "first"),
         flare=("flare_status", "first"),
         disease=("canonical_disease", "first"),
@@ -51,8 +51,11 @@ def build_samples(obs):
         day=("relative_timepoint_seconds", "first"),
         freezer_days=("cell_barcoding_delay_days", "first"),
         hbi=("harvey_bradshaw_index", "first"),
+        age=("age_at_start_years", "first"),            # new in v3
+        steroid_hours=("hours_since_steroids", "first"),  # new in v3; blank = no recent steroids recorded
         n_cells=("flare_status", "size"),
-    ).reset_index()
+    )
+    s = obs.groupby("sample_id", observed=True).agg(**{k: v for k, v in cols.items() if v[0] in obs.columns}).reset_index()
     s["person"] = s["person"].astype(str).map(alias)
     s["day"] = (s["day"] / 86400).round(1)
     for c in ["flare", "disease", "run"]:

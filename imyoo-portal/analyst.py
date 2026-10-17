@@ -26,6 +26,8 @@ How the analyses work:
 - The team's earlier look suggested B cells (especially IgM memory B cells) rise during flares, and that
   comparing people with their own normal works better than one rule for everyone. Treat these as claims to
   check, not facts.
+- Steroids treat flares and change immune cells; use exclude_within_hours_of_steroids to check whether a result
+  is driven by steroids rather than the flare itself.
 
 Rules:
 - ONLY state numbers that come from tool results. Never invent or estimate numbers.
@@ -68,7 +70,10 @@ TOOLS = [
          "group": {"type": "string", "enum": ["Bowel disease", "Everyone", "Other"]},
          "leave_out_batch": {"type": "string", "description": "batch name like R99, or omit"},
          "same_batch_only": {"type": "boolean"},
-         "disease": {"type": "string", "description": "text the disease label must contain, e.g. Crohn"}},
+         "disease": {"type": "string", "description": "text the disease label must contain, e.g. Crohn"},
+         "exclude_within_hours_of_steroids": {"type": "integer", "description": "leave out samples taken within "
+                                              "this many hours of steroids, e.g. 168 for a week (steroids treat "
+                                              "flares and change immune cells)"}},
          "required": ["level", "group"]}},
     {"name": "cell_type_person_by_person",
      "description": "For one cell type: each person's share when feeling fine vs during flare (draws one line per person).",

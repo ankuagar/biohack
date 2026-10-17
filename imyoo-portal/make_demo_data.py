@@ -57,23 +57,25 @@ def fake_obs():
             states = ["Baseline"] * n
         days = np.sort(rng.uniform(0, 240, n))
         run = rng.choice(run_names)
+        age = float(rng.integers(19, 70))
         person_bias = {t: rng.lognormal(0, 0.25) for t in TYPES}
         for j, (state, day) in enumerate(zip(states, days)):
             weights = np.array([TYPES[t][2] * person_bias[t] * (FLARE_EFFECT.get(t, 1) if state == "Flaring" else 1)
                                 for t in TYPES])
             n_cells = int(rng.integers(250, 400))
+            steroid = float(rng.uniform(2, 200)) if state == "Flaring" and rng.random() < 0.4 else np.nan
             picks = rng.choice(list(TYPES), size=n_cells, p=weights / weights.sum())
             for t in picks:
                 broad, subs, _ = TYPES[t]
                 rows.append((pid, f"{pid}-CC-{j + 1}", state, disease, run, day * 86400,
                              float(rng.uniform(4, 200)), float(rng.integers(0, 15)), broad, t,
-                             rng.choice(subs) if subs else None))
+                             rng.choice(subs) if subs else None, age, steroid))
     obs = pd.DataFrame(rows, columns=[
         "participant_id", "sample_id", "flare_status", "canonical_disease", "cell_barcoding_run_id",
         "relative_timepoint_seconds", "cell_barcoding_delay_days", "harvey_bradshaw_index",
-        "cell_type_level_2", "cell_type_level_3", "cell_type_level_4"])
+        "cell_type_level_2", "cell_type_level_3", "cell_type_level_4", "age_at_start_years", "hours_since_steroids"])
     # one freezer time / score per sample, like the real data
-    for c in ["cell_barcoding_delay_days", "harvey_bradshaw_index"]:
+    for c in ["cell_barcoding_delay_days", "harvey_bradshaw_index", "hours_since_steroids"]:
         obs[c] = obs.groupby("sample_id")[c].transform("first")
     return obs
 
