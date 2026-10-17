@@ -69,6 +69,9 @@ def composition(obs, samples):
     out = []
     n = samples.set_index("sample_id")["n_cells"]
     for key, col in LEVELS.items():
+        if col not in obs.columns:  # e.g. v3 dropped cell_type_level_4
+            print(f"   (no {col} in this file; skipping that detail level)")
+            continue
         counts = pd.crosstab(obs["sample_id"].astype(str), obs[col].astype(str))
         counts = counts.drop(columns=[c for c in counts.columns if c in ("nan", "None")], errors="ignore")
         pct = counts.div(n.reindex(counts.index), axis=0) * 100

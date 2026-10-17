@@ -445,7 +445,7 @@ def analyst_tools():
 
     def list_options():
         c = D["composition"]
-        return ({"cell_types": {lv: sorted(c.loc[c["level"] == lv, "cell_type"].unique()) for lv in LEVEL_NAMES},
+        return ({"cell_types": {lv: sorted(c.loc[c["level"] == lv, "cell_type"].unique()) for lv in LEVELS},
                  "gene_cell_types": sorted(D["gene_tests"]["cell_type"].unique()),
                  "batches": sorted(D["samples"]["run"].unique()),
                  "diseases": sorted(D["samples"]["disease"].unique())}, None)
@@ -534,6 +534,7 @@ def analyst_tools():
 
 D = load()
 INFO = D["info"]
+LEVELS = [k for k in LEVEL_NAMES if (D["composition"]["level"] == k).any()]  # detail levels this data has
 
 # ---------- sidebar ----------
 
@@ -648,7 +649,7 @@ elif page == "A person's journey":
     multi = samples_g.groupby("person")["flare"].nunique().eq(2)
     default = next((p for p in people if multi.get(p, False)), people[0])
     person = st.selectbox("Pick a person", people, index=people.index(default))
-    level = st.radio("Detail", list(LEVEL_NAMES), format_func=LEVEL_NAMES.get, horizontal=True)
+    level = st.radio("Detail", LEVELS, format_func=LEVEL_NAMES.get, horizontal=True)
     s = samples_g[samples_g["person"] == person].sort_values("day")
     st.caption(f"Condition: {s['disease'].iloc[0]} · {len(s)} samples over {s['day'].max() - s['day'].min():.0f} days")
     c = D["composition"]
@@ -681,7 +682,7 @@ elif page == "Flare signature":
     st.markdown("For each person who gave **both** kinds of sample, we compare their flare blood with their own "
                 "feeling-fine blood, then ask: **does the change point the same way for most people?**")
     c1, c2 = st.columns([2, 1])
-    level = c1.radio("Detail", list(LEVEL_NAMES), format_func=LEVEL_NAMES.get, horizontal=True, index=1)
+    level = c1.radio("Detail", LEVELS, format_func=LEVEL_NAMES.get, horizontal=True, index=min(1, len(LEVELS) - 1))
     runs = sorted(D["samples"]["run"].unique())
     left_out = c2.selectbox("Robustness check: leave out one lab batch", ["None"] + runs,
                             help="Re-runs the test without that batch. If a result stays coloured, "
