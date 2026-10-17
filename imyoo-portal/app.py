@@ -601,24 +601,35 @@ if page == "Home":
 
     who = {"Bowel disease": "bowel-disease patients", "Everyone": "everyone", "Other": "people with other conditions"}[group]
     st.subheader(f"What we found ({who})")
-    found = False
+    fam_res, _ = paired_cell_stats(FAM, group, ())
+    hyp = fam_res[fam_res["cell type"] == "B Cells"] if len(fam_res) else fam_res
+    if len(hyp):
+        h = hyp.iloc[0]
+        direction, consistent = verdict(h)
+        finding("Our hypothesis, re-tested on the newest data",
+                f"During a flare, **B Cells** {direction} in **{consistent} of {h['people']}** people",
+                f"Average change {h['change']:+.1f} percentage points. Tested on its own (we chose this before the "
+                f"newest data arrived): p {pval_text(h['p'])}. Corrected for testing all {len(fam_res)} cell families: "
+                f"adjusted p {pval_text(h['adjusted p'])}.",
+                quiet=h["p"] >= 0.05)
+    shown = {"B Cells"}
     for level, intro in [(FAM, "Big picture"), ("detailed", "Zooming in")]:
         res, _ = paired_cell_stats(level, group, ())
-        if res.empty or res.iloc[0]["adjusted p"] >= 0.05:
-            continue
-        top = res.iloc[0]
-        direction, consistent = verdict(top)
-        found = True
-        finding(intro, f"During a flare, **{top['cell type']}** {direction} in **{consistent} of {top['people']}** people",
-                f"Average change {top['change']:+.1f} percentage points of all immune cells · adjusted p "
-                f"{pval_text(top['adjusted p'])} · each person compared with their own calm samples")
-    if not found:
-        res, _ = paired_cell_stats("detailed", group, ())
-        if len(res):
-            top = res.iloc[0]
+        for _, top in res[res["adjusted p"] < 0.05].head(2).iterrows():
+            if top["cell type"] in shown:
+                continue
+            shown.add(top["cell type"])
             direction, consistent = verdict(top)
-            finding("No clear signal yet", f"Strongest lead: **{top['cell type']}** {direction} in {consistent} of "
-                    f"{top['people']} people", f"adjusted p {pval_text(top['adjusted p'])}: doesn't pass the strict test",
+            finding(intro, f"During a flare, **{top['cell type']}** {direction} in **{consistent} of {top['people']}** "
+                    "people", f"Average change {top['change']:+.1f} percentage points · adjusted p "
+                    f"{pval_text(top['adjusted p'])} · each person compared with their own calm samples")
+    if len(shown) == 1 and len(fam_res):
+        lead = fam_res[fam_res["cell type"] != "B Cells"].head(1)
+        if len(lead):
+            top = lead.iloc[0]
+            direction, consistent = verdict(top)
+            finding("Other cell families", f"**{top['cell type']}** {direction} in {consistent} of {top['people']} "
+                    "people", f"adjusted p {pval_text(top['adjusted p'])}: a trend, doesn't pass the strict test",
                     quiet=True)
 
     st.subheader("Take the tour")
