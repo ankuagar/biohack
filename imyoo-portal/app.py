@@ -582,7 +582,7 @@ st.sidebar.divider()
 group = st.sidebar.selectbox("Who to include", ["Bowel disease", "Everyone", "Other"],
                              help="'Other' = the people with arthritis, lupus or fibromyalgia instead of bowel disease.")
 present = st.sidebar.toggle("🎤 Presentation mode", help="Bigger text for the big screen.")
-st.sidebar.caption("People are shown as P01–P29. Data stays inside SPC's AWS. "
+st.sidebar.caption(f"People are shown as P01–P{INFO['people']:02d}. Data stays inside SPC's AWS. "
                    "No attempt is made to identify anyone.")
 st.sidebar.caption("Built at the SPC Bio-Data Hackathon · data from ImYoo")
 st.markdown(CSS + (CSS_PRESENT if present else ""), unsafe_allow_html=True)
@@ -924,7 +924,7 @@ elif page == "Ask the Flare Analyst":
         st.session_state.pop("chat", None)
         st.session_state.pop("bedrock_messages", None)
     st.caption("Claude only sees summary results (counts, averages, test results), never cells or raw data. "
-               "People appear only as P01–P29.")
+               "People appear only as P01, P02, …")
     chat = st.session_state.setdefault("chat", [])
     history = st.session_state.setdefault("bedrock_messages", [])
 
@@ -1386,14 +1386,16 @@ elif page == "How we checked":
                     rows.append({"samples used": name, "people": int(row["people"]),
                                  f"{top_ct}: people going up": int(row["people up"]),
                                  "average change (points)": round(row["change"], 1),
-                                 "adjusted p": round(row["adjusted p"], 3)})
+                                 "p (tested on its own)": round(row["p"], 3),
+                                 "adjusted p (all families)": round(row["adjusted p"], 3)})
             st.dataframe(pd.DataFrame(rows), hide_index=True)
             st.markdown("If the change holds in the lower rows, **recorded** steroid use isn't what's driving it. "
                         "On *Flare signature* you can try other windows.")
 
     st.subheader("✅ Corrected for testing many things at once")
-    st.markdown("Testing 20 cell types means one could look 'significant' by luck. We use the standard "
-                "Benjamini–Hochberg correction (the 'adjusted p').")
+    st.markdown("Testing many cell types at once means one could look 'significant' by luck. We use the standard "
+                "Benjamini–Hochberg correction (the 'adjusted p'). Our B-cell hypothesis was chosen before the newest "
+                "data arrived, so we also show its plain p-value as a single test.")
     st.subheader("✅ Does the headline hold in each disease?")
     res_all, pairs = paired_cell_stats(FAM, "Bowel disease", ())
     if len(res_all):

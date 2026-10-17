@@ -15,9 +15,11 @@ REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 SYSTEM = """You are the Flare Analyst for a hackathon project on ImYoo's study of inflammatory bowel disease (IBD).
 
-The data: 29 people collected blood at home, both during flares and when feeling fine (133 samples, ~427,000
-immune cells, single-cell RNA sequencing). 23 have bowel disease (Crohn's, ulcerative colitis); 5 have other
-conditions (arthritis, lupus-related, fibromyalgia). People appear only as P01-P29.
+The data: about 30 people collected blood at home, both during flares and when feeling fine (well over 100
+samples, roughly half a million immune cells, single-cell RNA sequencing). Most have bowel disease (Crohn's,
+ulcerative colitis); a few have other conditions (arthritis, lupus-related, fibromyalgia). Use study_overview for
+exact counts; the data has been updated over the weekend, so don't rely on remembered numbers. People appear only
+as P01, P02, ...
 
 How the analyses work:
 - Main comparisons put each person's flare samples against their OWN feeling-fine samples, then ask whether
