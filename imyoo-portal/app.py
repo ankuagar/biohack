@@ -33,6 +33,7 @@ st.set_page_config(page_title="ImYoo Flare Explorer", page_icon="🩸", layout="
 
 PAGES = {"Home": "🏠", "The study": "🗓️", "A person's journey": "👤", "Flare signature": "📊",
          "Seeing a flare coming": "🔮", "Ask the Flare Analyst": "💬", "My immune report": "📋",
+         "Sid's journey": "🦴",
          "Cell map": "🗺️", "Genes": "🧬", "How we checked": "✅"}
 
 CSS = """
@@ -142,6 +143,34 @@ def load():
     m = d["cells_map"]
     d["cells_map"] = m[~m["broad"].str.contains(JUNK, case=False) & ~m["detailed"].str.contains(JUNK, case=False)]
     return d
+
+
+@st.cache_data
+def load_sid():
+    """Sid Sijbrandij's blood summaries from sid_precompute.py, or None if not built yet."""
+    folder = f"{DATA}/sid"
+    if not os.path.exists(f"{folder}/info.json"):
+        return None
+    d = {n: pd.read_parquet(f"{folder}/{n}.parquet")
+         for n in ["draws", "composition", "cells_map", "clones", "tcell_diversity", "markers", "events"]}
+    with open(f"{folder}/info.json") as f:
+        d["info"] = json.load(f)
+    for n in ["draws", "composition", "cells_map", "clones", "tcell_diversity"]:
+        d[n]["date"] = pd.to_datetime(d[n]["date"])
+    d["events"] = d["events"].dropna()
+    d["events"]["date"] = pd.to_datetime(d["events"]["date"])
+    return d
+
+
+def mark_events(fig, events, start, end):
+    """Dashed line + label for each tumour sampling date that falls inside the chart's time range."""
+    for _, e in events.iterrows():
+        if start - pd.Timedelta(days=10) <= e["date"] <= end + pd.Timedelta(days=10):
+            fig.add_shape(type="line", x0=e["date"], x1=e["date"], y0=0, y1=1, yref="paper",
+                          line=dict(color=FLARE, dash="dash", width=2))
+            fig.add_annotation(x=e["date"], y=1.02, yref="paper", text=e["label"].split(" (")[0] + " " +
+                               e["label"].split("(")[-1].rstrip(")"), showarrow=False,
+                               font=dict(color=FLARE, size=12), xanchor="left")
 
 
 def type_colors(level):
@@ -966,6 +995,118 @@ elif page == "My immune report":
             st.error(f"Couldn't reach Claude: {type(e).__name__}: {e}")
     with st.expander("The numbers behind this report"):
         st.markdown("\n".join(f"- {f}" for f in facts))
+
+elif page == "Sid's journey":
+    header("Sid's journey: one patient's immune system through cancer treatment",
+           "Sid Sijbrandij openly shared his osteosarcoma data to advance cancer research. Here we follow the "
+           "**immune cells in his blood** across his treatment, using the tools we built for ImYoo.")
+    SD = load_sid()
+    if SD is None:
+        st.info("Sid's summaries aren't built yet. In SageMaker run `python sid_precompute.py` (see README), "
+                "then refresh this page.")
+        st.stop()
+    si = SD["info"]
+    span = (pd.Timestamp(si["last_draw"]) - pd.Timestamp(si["first_draw"])).days
+    kpis([("🩸", si["draws"], "blood draws"), ("📅", f"{span} days", f"{si['first_draw']} → {si['last_draw']}"),
+          ("🔬", f"{si['cells']:,}", "immune cells"),
+          ("✅", f"{si['tcr_called_t_pct']:.0f}%" if si.get("tcr_called_t_pct") is not None else "n/a",
+           "label check passed (see below)")])
+    finding("How the datasets connect",
+            "ImYoo's expert-labelled cells taught a model what each immune cell looks like, then it labelled "
+            f"**{si['cells']:,} of Sid's cells**",
+            f"Trained on {si['teaching_cells']:,} ImYoo cells and {si['genes_used']:,} genes both studies measured. "
+            f"{si['uncertain_pct']:.1f}% of Sid's cells were too uncertain to label and are left out.")
+    events, comp = SD["events"], SD["composition"]
+    start, end = comp["date"].min(), comp["date"].max()
+
+    st.subheader("His immune mix at each blood draw")
+    level = st.radio("Detail", ["broad", "detailed"], format_func={"broad": "Broad cell families",
+                                                                  "detailed": "Detailed cell types"}.get,
+                     horizontal=True, key="sid_level")
+    c = comp[comp["level"] == level]
+    fig = px.area(c.sort_values("date"), x="date", y="pct", color="cell_type", markers=True,
+                  color_discrete_map=type_colors(level), color_discrete_sequence=DETAIL_PALETTE,
+                  labels={"date": "", "pct": "% of immune cells", "cell_type": "Cell type"})
+    mark_events(fig, events, start, end)
+    fig.update_layout(height=460, legend=dict(orientation="h", y=-0.15))
+    chart(fig)
+    st.caption("Dots are blood draws. Dashed lines mark tumour samples taken in the same period (from the "
+               "study's catalogue). Treatment dates aren't in the data, so they're not shown.")
+
+    st.subheader("Compared with his first blood draw")
+    b = comp[comp["level"] == "broad"].pivot(index="date", columns="cell_type", values="pct").sort_index()
+    delta = (b - b.iloc[0]).reset_index().melt(id_vars="date", var_name="cell_type", value_name="change")
+    main_fams = b.mean().sort_values(ascending=False).head(5).index
+    fig = px.line(delta[delta["cell_type"].isin(main_fams)], x="date", y="change", color="cell_type", markers=True,
+                  color_discrete_map=FAMILY_COLORS,
+                  labels={"date": "", "change": "Change vs first draw (percentage points)", "cell_type": ""})
+    fig.add_hline(y=0, line_color=avg_color(), line_width=1)
+    mark_events(fig, events, start, end)
+    fig.update_layout(height=400)
+    chart(fig)
+    biggest = delta[delta["date"] == delta["date"].max()].set_index("cell_type")["change"]
+    biggest = biggest[biggest.index.isin(main_fams)]
+    if len(biggest):
+        up, down = biggest.idxmax(), biggest.idxmin()
+        st.markdown(f"By the last draw, **{up}** are {biggest[up]:+.1f} points and **{down}** {biggest[down]:+.1f} "
+                    "points compared with his first draw.")
+    st.caption("His first draw (days before a tumour biopsy) is the reference, so this shows change during "
+               "treatment, not a comparison with healthy people.")
+
+    st.subheader("T-cell families over time")
+    st.markdown("Each T cell carries a receptor 'barcode', and cells with the same barcode belong to one **family**. "
+                "When the immune system responds to something, particular families **multiply**.")
+    dv, cl = SD["tcell_diversity"], SD["clones"]
+    c1, c2 = st.columns([2, 1])
+    top_n = c2.slider("Families to show", 3, 15, 8)
+    order = cl.groupby("family")["pct"].max().sort_values(ascending=False).index[:top_n]
+    fig = px.line(cl[cl["family"].isin(order)], x="date", y="pct", color="family", markers=True,
+                  hover_data={"clone": True},
+                  labels={"date": "", "pct": "% of his T cells", "family": ""})
+    mark_events(fig, events, start, end)
+    fig.update_layout(height=400)
+    chart(fig, where=c1)
+    fig = px.line(dv, x="date", y="effective_families", markers=True,
+                  labels={"date": "", "effective_families": "Effective number of families"})
+    fig.update_traces(line_color=FINE)
+    fig.update_layout(height=260, margin=dict(t=10))
+    chart(fig, where=c2)
+    c2.caption("Falls when a few families take over (a focused response), rises when many share the space.")
+
+    st.subheader("His cell map")
+    cm = SD["cells_map"].copy()
+    cm["draw"] = cm["date"].dt.strftime("%Y-%m-%d")
+    colour = st.radio("Colour by", ["Cell type", "Detailed cell type", "Blood draw"], horizontal=True, key="sid_map")
+    col = {"Cell type": "broad", "Detailed cell type": "detailed", "Blood draw": "draw"}[colour]
+    fig = px.scatter(cm, x="x", y="y", color=col, render_mode="webgl",
+                     color_discrete_map=FAMILY_COLORS if col == "broad" else None,
+                     color_discrete_sequence=DETAIL_PALETTE, labels={col: ""},
+                     category_orders={"draw": sorted(cm["draw"].unique())})
+    fig.update_traces(marker=dict(size=2.5, opacity=0.6))
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False)
+    fig.update_layout(height=600, legend=dict(itemsizing="constant"))
+    chart(fig)
+
+    st.subheader("How we know the labels are right")
+    c1, c2 = st.columns([1, 2])
+    if si.get("tcr_called_t_pct") is not None:
+        c1.metric("Cells with a T-cell receptor labelled 'T cell'", f"{si['tcr_called_t_pct']:.1f}%",
+                  help="Only T cells carry a T-cell receptor, so this is a check the model never saw during teaching.")
+    c1.metric("Too uncertain to label", f"{si['uncertain_pct']:.1f}%")
+    mk = SD["markers"].set_index("predicted family")
+    fig = px.imshow(mk, aspect="auto", color_continuous_scale="Oranges",
+                    labels=dict(x="Marker gene", y="Labelled as", color="Activity"))
+    fig.update_layout(height=320, margin=dict(t=10))
+    chart(fig, where=c2)
+    c2.caption("Each cell type should light up on its own marker genes (e.g. B cells on MS4A1 and CD79A, "
+               "T cells on CD3E, monocytes on CD14 and LYZ).")
+
+    st.subheader("⚠️ Keep in mind")
+    st.markdown("- **One person:** this describes Sid's journey; it isn't a finding about osteosarcoma in general.\n"
+                "- **Labels are borrowed** from ImYoo (a different study, kit and disease), so fine-grained types are "
+                "less certain than broad families.\n"
+                "- **Treatment dates aren't in the data**, so changes can't be tied to specific treatments here.")
 
 elif page == "Cell map":
     header("A map of every kind of immune cell")

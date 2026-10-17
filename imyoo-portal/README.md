@@ -8,6 +8,8 @@ A clickable portal: what changes in the blood when a bowel-disease flare hits?
 | `app.py` | The portal (Streamlit) | SageMaker (real) or laptop (demo) |
 | `analyst.py` | The Flare Analyst: Claude (Amazon Bedrock, inside AWS) running the portal's analyses as tools | SageMaker or laptop |
 | `.streamlit/config.toml` | Theme (Inter font, flare-orange accent, rounded corners), hides developer toolbar, auto-reload on file change | SageMaker or laptop |
+| `sid_inspect.py` | Prints the structure of Sid Sijbrandij's public files (catalogue + blood single-cell file) | SageMaker |
+| `sid_precompute.py` | Labels Sid's blood cells using ImYoo's expert-labelled atlas, then summarises his immune journey for the portal | SageMaker |
 | `make_demo_data.py` | Makes **made-up** data in the same shape, for trying the portal anywhere | anywhere |
 
 ## Run it in SageMaker on the real data
@@ -62,6 +64,19 @@ streamlit run app.py
   "Explore on its own" runs hypothesis → test → result → next question by itself.
 - **My immune report**: patient-friendly view of one sample vs the person's own normal (status card, usual-range
   bands, B-cell timeline with red-flag line, "Explain my report" by Claude).
+- **Sid's journey**: Sid Sijbrandij's blood immune cells across his osteosarcoma treatment: immune mix per blood
+  draw (tumour sample dates marked), change vs his first draw, T-cell families over time, cell map, label checks.
 - **How we checked**: junk removed, batches, freezer time, multiple-testing correction, per-disease check.
 
 Data rule: real data stays in SPC's AWS. People are shown as P01–P29.
+
+## Sid's journey (public osteosarcoma data)
+
+Sid's bucket is public but outside the hackathon's buckets, so copy it **anonymously** (`--no-sign-request`):
+```bash
+mkdir -p ~/data/sid/catalog
+aws s3 cp s3://sid-sijbrandij-osteosarc-dataset/catalog/ ~/data/sid/catalog/ --recursive --region us-west-2 --no-sign-request
+aws s3 cp s3://sid-sijbrandij-osteosarc-dataset/hudson_lab/PBMC_scRNAseq/seurat_objects/combined_seurat_object_20260323.h5ad ~/data/sid/ --region us-west-2 --no-sign-request
+cd ~/imyoo-portal && python sid_precompute.py
+```
+It needs the ImYoo file in `~/data/` too (it learns cell types from it). Output goes to `data/sid/`; the portal picks it up.
