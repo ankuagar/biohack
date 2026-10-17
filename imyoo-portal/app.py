@@ -145,12 +145,17 @@ def load():
     return d
 
 
-@st.cache_data
 def load_sid():
-    """Sid Sijbrandij's blood summaries from sid_precompute.py, or None if not built yet."""
-    folder = f"{DATA}/sid"
-    if not os.path.exists(f"{folder}/info.json"):
-        return None
+    """Sid Sijbrandij's blood summaries from sid_precompute.py, or None if not built yet.
+
+    Checked fresh on every visit (not remembered), and re-read whenever the summaries are rebuilt.
+    """
+    info = f"{DATA}/sid/info.json"
+    return _read_sid(f"{DATA}/sid", os.path.getmtime(info)) if os.path.exists(info) else None
+
+
+@st.cache_data
+def _read_sid(folder, built_at):
     d = {n: pd.read_parquet(f"{folder}/{n}.parquet")
          for n in ["draws", "composition", "cells_map", "clones", "tcell_diversity", "markers", "events"]}
     d["groups"] = pd.read_parquet(f"{folder}/groups.parquet") if os.path.exists(f"{folder}/groups.parquet") else None
