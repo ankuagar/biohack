@@ -29,13 +29,38 @@ MIN_CONFIDENCE = 0.6   # below this, a cell is called "Uncertain"
 N_MAP_CELLS = 60_000
 N_TOP_CLONES = 30
 MARKERS = ["CD3E", "CD8A", "MS4A1", "CD79A", "NKG7", "GNLY", "CD14", "FCGR3A", "LYZ", "FCER1A"]
+MARKER_IDS = {"ENSG00000198851", "ENSG00000153563", "ENSG00000156738", "ENSG00000105369", "ENSG00000105374",
+              "ENSG00000115523", "ENSG00000170458", "ENSG00000203747", "ENSG00000090382", "ENSG00000179639"}
+# 10x's gene table (gene code + gene name) from Sid's lab output, used to translate if the files name genes differently
+FEATURES = os.path.expanduser("~/data/sid/features.tsv.gz")
 
 
-def symbols(adata):
-    for c in ["gene_symbols", "gene_name", "feature_name", "symbol"]:
-        if c in adata.var.columns:
-            return adata.var[c].astype(str).to_numpy()
-    return adata.var_names.astype(str).to_numpy()
+def gene_name_options(adata, translate=None):
+    """Every way this file names its genes: the row names, any text column in .var, and (if given) the row
+    names translated through 10x's name<->code table.
+
+    Gene ID codes lose their version suffix (ENSG00000156738.18 -> ENSG00000156738) so they match across files.
+    """
+    opts = {"row names": adata.var_names.astype(str)}
+    for c in adata.var.columns:
+        if adata.var[c].dtype == object or str(adata.var[c].dtype) == "category":
+            opts[c] = adata.var[c].astype(str)
+    if translate:
+        rows = adata.var_names.astype(str)
+        opts["row names via 10x table"] = [translate.get(g, g) for g in rows]
+    return {k: np.array([g.split(".")[0] if g.startswith("ENS") else g for g in v]) for k, v in opts.items()}
+
+
+def match_gene_names(a, b, translate=None):
+    """Pick the naming systems (one per file) that share the most genes INCLUDING well-known immune markers."""
+    best = (-1, 0, None, None)
+    for ka, va in gene_name_options(a, translate).items():
+        for kb, vb in gene_name_options(b, translate).items():
+            shared = set(va) & set(vb)
+            score = (len(shared & (set(MARKERS) | MARKER_IDS)), len(shared))
+            if score > best[:2]:
+                best = (*score, (ka, va), (kb, vb))
+    return best
 
 
 def lognorm(X):
@@ -57,6 +82,7 @@ def main():
     ap.add_argument("--sid", default=SID_H5AD)
     ap.add_argument("--imyoo", default=IMYOO_H5AD)
     ap.add_argument("--catalog", default=CATALOG)
+    ap.add_argument("--features", default=FEATURES)
     ap.add_argument("--out", default=OUT)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -85,7 +111,19 @@ def main():
 
     # ---- 2. genes both datasets measured; keep the most variable ones
     sid = sc.read_h5ad(args.sid, backed="r")
-    im_sym, sid_sym = symbols(train), symbols(sid)
+    translate = None
+    if os.path.exists(args.features):  # name -> code and code -> name
+        ft = pd.read_csv(args.features, sep="\t", header=None).iloc[:, :2].astype(str)
+        translate = {**dict(zip(ft[1], ft[0])), **dict(zip(ft[0], ft[1]))}
+    n_markers, n_shared, (im_key, im_sym), (sid_key, sid_sym) = match_gene_names(train, sid, translate)
+    say(f"Gene names matched using ImYoo '{im_key}' and Sid '{sid_key}': {n_shared:,} genes, "
+        f"{n_markers} of 10 immune markers")
+    if n_markers < 5 or n_shared < min(2000, 0.5 * min(train.n_vars, sid.n_vars)):
+        raise SystemExit("The two files name genes too differently to match. Copy Sid's 10x gene table first:\n"
+                         "  aws s3 cp s3://sid-sijbrandij-osteosarc-dataset/hudson_lab/PBMC_scRNAseq/cellranger/"
+                         "2026-02-13/2026-02-13_capture1/outs/multi/count/raw_feature_bc_matrix/features.tsv.gz "
+                         "~/data/sid/ --region us-west-2 --no-sign-request\n"
+                         f"(ImYoo gene columns: {list(gene_name_options(train))}; Sid: {list(gene_name_options(sid))})")
     shared = sorted(set(im_sym) & set(sid_sym))
     Xtr_all = lognorm(train.X)
     im_col = {g: i for i, g in enumerate(im_sym)}
@@ -123,8 +161,15 @@ def main():
     detail = np.empty(sid.n_obs, dtype=object)
     broad = np.empty(sid.n_obs, dtype=object)
     conf = np.zeros(sid.n_obs, dtype=np.float32)
-    marker_cols = [sid_col[m] for m in MARKERS if m in sid_col]
-    marker_names = [m for m in MARKERS if m in sid_col]
+    # markers are gene names; if Sid's file is matched by ID codes, look names up in its other columns
+    sym_lookup = sid_col
+    if not any(m in sid_col for m in MARKERS):
+        for _, names in gene_name_options(sid, translate).items():
+            if sum(m in set(names) for m in MARKERS) >= 5:
+                sym_lookup = {g: i for i, g in enumerate(names)}
+                break
+    marker_cols = [sym_lookup[m] for m in MARKERS if m in sym_lookup]
+    marker_names = [m for m in MARKERS if m in sym_lookup]
     marker_sum = {}
     for start in range(0, sid.n_obs, CHUNK):
         stop = min(start + CHUNK, sid.n_obs)
