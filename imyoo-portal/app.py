@@ -1488,8 +1488,29 @@ elif page == "Sid cluster bridge":
         selected_type = st.selectbox("Sid cell group", cell_types, index=cell_types.index(default_type),
                                      help="Sid's pseudobulk summaries are grouped by blood draw and predicted cell family.")
         cluster_ids = sorted(scores["cluster"].astype(str).unique(), key=lambda x: int(x) if x.isdigit() else x)
-        selected_cluster = st.selectbox("ImYoo cluster marker program", cluster_ids,
-                                        help="This selects an ImYoo cluster's marker genes; it does not assign Sid's cells to that cluster.")
+        cluster_summary = D.get("cluster_summary")
+        summary_by_cluster = {}
+        if cluster_summary is not None and "cluster" in cluster_summary:
+            summary_by_cluster = {str(row["cluster"]): row for _, row in cluster_summary.iterrows()}
+        marker_by_cluster = {}
+        for _, row in bridge_summary.iterrows():
+            marker_by_cluster[str(row["cluster"])] = [g.strip() for g in str(row.get("marker_genes", "")).split(",") if g.strip()]
+
+        def cluster_program_label(cluster):
+            row = summary_by_cluster.get(str(cluster), {})
+            dominant = str(row.get("dominant_detailed", "")).strip()
+            if not dominant or dominant.lower() in {"nan", "unknown", "unlabelled"}:
+                dominant = str(row.get("dominant_broad", "")).strip()
+            if not dominant or dominant.lower() in {"nan", "unknown", "unlabelled"}:
+                dominant = "mixed / exploratory"
+            markers_text = ", ".join(marker_by_cluster.get(str(cluster), [])[:3])
+            return f"Cluster {cluster} — {dominant}" + (f" · markers: {markers_text}" if markers_text else "")
+
+        selected_cluster = st.selectbox(
+            "ImYoo cluster marker program", cluster_ids,
+            format_func=cluster_program_label,
+            help="The annotation is the most common existing label in the cluster; markers are representative genes. This does not assign Sid's cells to the cluster.")
+        selected_label = cluster_program_label(selected_cluster)
         view = scores[(scores["cell_type"].astype(str) == selected_type) &
                       (scores["cluster"].astype(str) == selected_cluster)].sort_values("date")
         if view.empty:
@@ -1498,7 +1519,7 @@ elif page == "Sid cluster bridge":
             fig = px.line(view, x="date", y="score", markers=True,
                           hover_data={"date": True, "score": ":.2f", "n_cells": True, "genes_used": True},
                           labels={"date": "Sid blood draw", "score": "Standardized ImYoo marker-program score"},
-                          title=f"ImYoo cluster {selected_cluster} program in Sid's {selected_type}")
+                          title=f"{selected_label} program in Sid's {selected_type}")
             sd = load_sid()
             if sd is not None and not sd["events"].empty:
                 mark_events(fig, sd["events"], view["date"].min(), view["date"].max())
@@ -1518,6 +1539,53 @@ elif page == "Sid cluster bridge":
             if not one.empty:
                 st.write(one[["marker_genes", "genes_used", "n_marker_genes", "n_genes_used"]].iloc[0].to_dict())
         st.caption(f"Bridge used {bridge_info.get('clusters_with_matches', 'unknown')} ImYoo clusters with at least one matched gene. Sid's data are from one person and a different lab kit.")
+
+        st.subheader(f"All ImYoo cluster programs in Sid's {selected_type}")
+        all_scores = scores[scores["cell_type"].astype(str) == selected_type].copy()
+        all_scores = all_scores.dropna(subset=["date", "score"])
+        heat = all_scores.pivot_table(index="cluster", columns="date", values="score", aggfunc="mean")
+        if not heat.empty:
+            heat = heat.sort_index(key=lambda values: values.map(lambda value: int(value) if str(value).isdigit() else str(value)))
+            heat.index = [f"{cluster} · {str(summary_by_cluster.get(str(cluster), {}).get('dominant_broad', 'mixed / exploratory'))}"
+                          for cluster in heat.index]
+            fig = px.imshow(heat, aspect="auto", color_continuous_scale="RdBu_r", zmin=-2, zmax=2,
+                            labels={"x": "Sid blood-draw date", "y": "ImYoo cluster",
+                                    "color": "Standardized\nprogram score"},
+                            title=f"Marker-program activity across ImYoo clusters in Sid's {selected_type}")
+            fig.update_xaxes(tickformat="%b %Y", tickangle=-35)
+            fig.update_layout(height=max(420, min(760, 260 + 28 * len(heat))),
+                              margin=dict(t=78, b=90))
+            chart(fig)
+            st.caption("Each row is one ImYoo cluster's shared marker program. Red and blue show relative activity within this Sid cell group; they do not indicate absolute expression or a transferred cell identity.")
+
+        if not view.empty:
+            effects = []
+            for cluster, group in all_scores.groupby(all_scores["cluster"].astype(str), sort=False):
+                before_group = group.loc[group["date"] < split, "score"]
+                after_group = group.loc[group["date"] >= split, "score"]
+                effects.append({
+                    "cluster": str(cluster),
+                    "before": before_group.mean(),
+                    "after": after_group.mean(),
+                    "change": after_group.mean() - before_group.mean() if len(before_group) and len(after_group) else np.nan,
+                    "draws before": int(len(before_group)),
+                    "draws after": int(len(after_group)),
+                })
+            effects = pd.DataFrame(effects).dropna(subset=["change"])
+            if not effects.empty:
+                effects = effects.sort_values("change")
+                effects["program"] = effects["cluster"].map(cluster_program_label)
+                st.subheader(f"Program changes after {split:%Y-%m-%d}")
+                st.caption("This ranks the change in each cluster program's mean score after the selected date. It is descriptive and does not establish that the date caused the change.")
+                fig = px.bar(effects, x="change", y="program", orientation="h", color="change",
+                             color_continuous_scale="RdBu_r", range_color=[-2, 2],
+                             labels={"change": "After minus before standardized score", "program": "ImYoo cluster program"},
+                             title="Which ImYoo programs changed most across the selected split?")
+                fig.update_layout(height=max(360, min(680, 220 + 26 * len(effects))),
+                                  coloraxis_colorbar=dict(title="Change"))
+                chart(fig)
+                st.dataframe(effects[["program", "before", "after", "change", "draws before", "draws after"]]
+                             .sort_values("change", ascending=False).round(2), hide_index=True, width="stretch")
 
 elif page == "Compare conditions":
     header("IBD vs cancer: do their immune changes look alike?",

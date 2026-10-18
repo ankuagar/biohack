@@ -99,12 +99,16 @@ A yellow banner says "DEMO MODE: made-up numbers". The Flare Analyst needs AWS a
 - **Cluster studies**: compares multiple resolutions and neighbor graphs, with configuration stability and cluster
   composition by flare status, person, sample, and existing cell labels.
 - **Sid cluster bridge**: scores Sid's compact blood-draw summaries against the marker-gene programs found in each
-  ImYoo cluster. This compares shared gene programs across datasets; it does not transfer ImYoo cell labels to Sid.
+  ImYoo cluster, with an all-cluster heatmap and before/after program ranking. This compares shared gene programs
+  across datasets; it does not transfer ImYoo cell labels to Sid.
 - **Genes**: which genes switch on or off during a flare inside each cell type.
 - **How we checked**: junk removed, lab batches, freezer time, steroids, correction for testing many things, and
   whether the finding holds in Crohn's and ulcerative colitis separately.
 
 Data rule: real data stays in SPC's AWS. People are shown as P01, P02, …
+
+The planned ImYoo–Sid bridge work is tracked in [SID_BRIDGE_ROADMAP.md](SID_BRIDGE_ROADMAP.md), including what is
+implemented and what still needs validation.
 
 ## Sid's journey (public osteosarcoma data)
 
