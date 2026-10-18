@@ -1,0 +1,7 @@
+{
+  "h5ad": "s3://imyoo-healthomics-241785579379-us-east-1/imyoo-clusters/v3/input/imyoo_v3.h5ad",
+  "container_image": "241785579379.dkr.ecr.us-east-1.amazonaws.com/imyoo-cluster:2",
+  "resolutions": "0.2,0.4,0.6,0.8,1.0",
+  "neighbors_list": "15",
+  "max_cells": 100000
+}

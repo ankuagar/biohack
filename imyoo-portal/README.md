@@ -13,6 +13,9 @@ Built for the [SPC Bio-Data Hackathon](https://www.southparkcommons.com/bio-data
 | `sid_precompute.py` | Labels groups of Sid's blood cells (T-cell receptors + a model taught on ImYoo's cells + marker genes) and summarises his T-cell families over time | SageMaker |
 | `sid_pseudobulk.py` | Gene activity per blood draw and cell family for Sid (reuses the group labels; no model re-run), for comparing IBD with cancer | SageMaker |
 | `flare_classifier.py` | Trains simple flare-vs-calm models on ImYoo's samples (cell mix, gene activity, each vs own normal), tests each on people it never saw, with a shuffle test | SageMaker |
+| `cluster_imyoo.py` | Finds unsupervised Leiden clusters from the single-cell expression representation, computes UMAP coordinates and marker genes, and writes compact portal tables | SageMaker only (real data) |
+| `cluster_study.py` | Compares Leiden resolutions and neighbor graphs, writes cluster composition and stability tables | AWS HealthOmics container |
+| `healthomics/` | AWS HealthOmics WDL, container recipes and run instructions for baseline clustering and parameter studies | AWS HealthOmics |
 | `make_demo_data.py` | Makes **made-up** data in the same shape, for trying the portal anywhere | anywhere |
 
 ## Run it in SageMaker on the real data
@@ -24,7 +27,7 @@ Built for the [SPC Bio-Data Hackathon](https://www.southparkcommons.com/bio-data
    (v2 is the earlier release; v1 is dummy data.) Use a space with enough memory (ml.r5.2xlarge, 64 GB) and
    storage (20 GB or more).
 2. **Put the code in place:** in JupyterLab's file panel make a folder `imyoo-portal`, open it, and use the
-   **Upload** button (arrow icon) for `precompute.py`, `app.py` and `analyst.py`. Dragging files in doesn't
+   **Upload** button (arrow icon) for `precompute.py`, `app.py`, `analyst.py` and `cluster_imyoo.py`. Dragging files in doesn't
    always overwrite old copies; Upload asks to overwrite. The theme file lives in a hidden folder, so create it
    from the terminal by copying `.streamlit/config.toml` into `~/imyoo-portal/.streamlit/`.
 3. **Install and build the summaries** (about 2 minutes on v3). If the file names genes only by code (ENSG…),
@@ -35,6 +38,13 @@ Built for the [SPC Bio-Data Hackathon](https://www.southparkcommons.com/bio-data
    pip install -q pyarrow streamlit plotly statsmodels scikit-learn boto3
    python precompute.py
    ```
+   To add the unsupervised single-cell page, install the clustering dependencies and run:
+   ```bash
+   pip install -q scanpy leidenalg igraph
+   python cluster_imyoo.py
+   ```
+   This uses a stored scVI/PCA representation when available, removes the same junk labels as `precompute.py`,
+   and writes only compact tables to `data/`. Adjust `--resolution` to make fewer or more clusters.
 4. **Start the portal:**
    ```bash
    streamlit run app.py --server.port 8501 --server.headless true \
@@ -83,6 +93,10 @@ A yellow banner says "DEMO MODE: made-up numbers". The Flare Analyst needs AWS a
   also ranks a small set of checkpoint and trafficking genes as target hypotheses, then keeps the Sid-specific B7-H3 /
   EphA2 binder hypotheses separate because blood immune data does not measure tumor-surface abundance.
 - **Cell map**: every kind of immune cell as islands of dots; lasso a group to see what's in it.
+- **Unsupervised clusters**: expression-based Leiden clusters, their existing cell-type composition, flare-minus-baseline
+  enrichment, and top marker genes. Cluster labels are exploratory and do not replace biological annotation.
+- **Cluster studies**: compares multiple resolutions and neighbor graphs, with configuration stability and cluster
+  composition by flare status, person, sample, and existing cell labels.
 - **Genes**: which genes switch on or off during a flare inside each cell type.
 - **How we checked**: junk removed, lab batches, freezer time, steroids, correction for testing many things, and
   whether the finding holds in Crohn's and ulcerative colitis separately.

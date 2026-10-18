@@ -1,0 +1,8 @@
+{
+  "h5ad": "s3://spc-biohack26-scratch/241785579379/imyoo-clusters/v3/input/imyoo_v3.h5ad",
+  "container_image": "241785579379.dkr.ecr.us-east-1.amazonaws.com/imyoo-cluster:1",
+  "resolution": 0.6,
+  "neighbors": 15,
+  "markers": 10,
+  "max_cells": 100000
+}
