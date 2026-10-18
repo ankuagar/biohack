@@ -14,7 +14,7 @@ import streamlit as st
 from scipy.stats import wilcoxon
 from statsmodels.stats.multitest import multipletests
 
-from precompute import CD8_PANEL
+from precompute import CD8_PANEL, family_of
 
 DATA = os.environ.get("IMYOO_PORTAL_DATA", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 FINE, FLARE = "#2b7bb9", "#e4572e"
@@ -25,25 +25,6 @@ LEVEL_NAMES = {"family": "Cell families", "broad": "Main cell types", "detailed"
                "tcell": "T-cell subsets"}
 
 
-def family_of(cell_type):
-    """Group a cell type name into its family (v3 splits e.g. B cells into naive, memory, plasma...)."""
-    import re
-    n = str(cell_type).lower()
-    if "nkt" in n or re.search(r"\bt cells?\b|t follicular|t helper|regulatory t|treg|mait|gamma.?delta", n):
-        return "T Cells"
-    if re.search(r"\bnk\b|natural killer", n):
-        return "NK Cells"
-    if "dendritic" in n or re.search(r"\b(c?dc\d?|pdc|asdc)\b", n):  # before B cells: "Plasmacytoid Dendritic"
-        return "Dendritic Cells"
-    if "plasma" in n or re.search(r"\bb cells?\b", n):
-        return "B Cells"
-    if "monocyte" in n or "macrophage" in n:
-        return "Monocytes"
-    if "progenitor" in n or "hspc" in n:
-        return "Progenitors"
-    if "proliferating" in n or "cycling" in n:
-        return "Proliferating Cells"
-    return "Other"
 JUNK = "artifact|Debris|Multiplet|Unknown|Unlabelled|Platelet"
 # cell-type colours: deliberately avoid the flare orange and feeling-fine blue
 FAMILY_COLORS = {"T Cells": "#9b8ce0", "NK Cells": "#3fb8a6", "B Cells": "#8cc63f", "Monocytes": "#f2c14e",
@@ -989,6 +970,52 @@ elif page == "Seeing a flare coming":
                         f"(from {fl_hit['person'].nunique()} people) with **{alarm}** among {len(ca)} calm samples. "
                         "It misses most flares, but when it fires, it's a flare.")
         st.caption("The line was picked after looking at this data, so it needs confirming on new patients.")
+
+    st.subheader("5. A trained flare classifier (tested on people it never saw)")
+    clf_file = f"{DATA}/classifier/results.json"
+    if not os.path.exists(clf_file):
+        st.info("Not built yet. In SageMaker run `python flare_classifier.py` (about 10–25 minutes), then refresh.")
+    else:
+        with open(clf_file) as f:
+            clf = json.load(f)
+        st.markdown(f"Each blood sample is a bag of thousands of cells with one label (flare or calm). Simple models "
+                    f"learned from **{clf['samples']} samples of {clf['people']} {clf['group'].lower()} patients**, "
+                    "and each person was scored by a model that **never saw them**. The **shuffle test** scrambles "
+                    f"the flare labels within each person {clf['shuffles']} times and retrains: a real result should "
+                    "beat the shuffled ones.")
+        rows = []
+        for name, r in clf["results"].items():
+            passed = r["shuffle_p"] < 0.05
+            rows.append({"approach": name, "correct ranking": r["correct_ranking"],
+                         "flare scored higher": f"{r['people_flare_higher']} of {r['people_with_both']} people",
+                         "shuffled labels (average)": r["shuffle_mean"], "shuffle-test p": r["shuffle_p"],
+                         "beats chance?": "✅ yes" if passed else "❌ no"})
+        tab = pd.DataFrame(rows)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=tab["approach"], y=tab["correct ranking"], name="Real labels",
+                             marker_color=[FLARE if b.startswith("✅") else GREY for b in tab["beats chance?"]],
+                             text=[f"{v:.0%}" for v in tab["correct ranking"]], textposition="outside"))
+        fig.add_trace(go.Scatter(x=tab["approach"], y=[r["shuffle_95th"] for r in clf["results"].values()],
+                                 mode="markers", name="Shuffled labels: 95% of runs below this",
+                                 marker=dict(symbol="line-ew-open", size=40, line=dict(width=3, color=avg_color()))))
+        fig.add_hline(y=0.5, line_dash="dot", line_color=GREY, annotation_text="coin toss", annotation_position="left")
+        fig.update_layout(height=380, yaxis=dict(range=[0, 1.08], tickformat=".0%", title="Correct ranking"),
+                          legend=dict(orientation="h", y=1.12))
+        chart(fig)
+        st.dataframe(tab.style.format({"correct ranking": "{:.0%}", "shuffled labels (average)": "{:.0%}",
+                                       "shuffle-test p": "{:.3f}"}), hide_index=True, width="stretch")
+        best = max(clf["results"].items(), key=lambda kv: kv[1]["correct_ranking"])
+        verdict = "beats" if best[1]["shuffle_p"] < 0.05 else "does not clearly beat"
+        st.markdown(f"Best: **{best[0]}** at **{best[1]['correct_ranking']:.0%}**, which {verdict} shuffled labels "
+                    f"(p = {best[1]['shuffle_p']:.3f}).")
+        with st.expander("What each model leans on"):
+            for name, r in clf["results"].items():
+                st.markdown(f"**{name}**")
+                st.dataframe(pd.DataFrame(r["top_features"]).round(3), hide_index=True, width="stretch")
+        st.caption(f"Gene-activity models use the {clf['top_genes_per_round']} most flare-related genes, picked again in "
+                   f"every round from the training people only, across these cell types: "
+                   f"{', '.join(clf['cell_types_for_genes'])}. With ~30 people, treat results as a first look; ImYoo's "
+                   "held-out patients would be the real test.")
 
     st.subheader("⚠️ Read this as a first look")
     st.markdown("- Only a few calm samples were taken shortly before a flare, so this is **exploratory**.\n"

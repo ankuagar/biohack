@@ -12,6 +12,7 @@ Built for the [SPC Bio-Data Hackathon](https://www.southparkcommons.com/bio-data
 | `sid_inspect.py` | Prints the structure of Sid Sijbrandij's public files (catalogue + blood single-cell file) | SageMaker |
 | `sid_precompute.py` | Labels groups of Sid's blood cells (T-cell receptors + a model taught on ImYoo's cells + marker genes) and summarises his T-cell families over time | SageMaker |
 | `sid_pseudobulk.py` | Gene activity per blood draw and cell family for Sid (reuses the group labels; no model re-run), for comparing IBD with cancer | SageMaker |
+| `flare_classifier.py` | Trains simple flare-vs-calm models on ImYoo's samples (cell mix, gene activity, each vs own normal), tests each on people it never saw, with a shuffle test | SageMaker |
 | `make_demo_data.py` | Makes **made-up** data in the same shape, for trying the portal anywhere | anywhere |
 
 ## Run it in SageMaker on the real data
@@ -67,7 +68,8 @@ A yellow banner says "DEMO MODE: made-up numbers". The Flare Analyst needs AWS a
   leave out samples taken soon after steroids. Detail levels: cell families (subtypes added back together), main
   cell types, detailed cell types.
 - **Seeing a flare coming**: can a blood score tell flare from calm, or warn early? Compares a one-size-fits-all
-  score with scores that compare each person with their own normal, plus a "red flag" for big B-cell jumps.
+  score with scores that compare each person with their own normal, a "red flag" for big B-cell jumps, and a
+  trained flare classifier (run `python flare_classifier.py` after `precompute.py`, ~10–25 minutes).
 - **Ask the Flare Analyst**: ask in plain English; Claude runs the analyses, shows charts and the exact numbers it
   saw. "Explore on its own" runs hypothesis → test → result → next question by itself.
 - **My immune report**: a patient-friendly view of one sample vs the person's own normal (how unusual each cell

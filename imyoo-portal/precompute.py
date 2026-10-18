@@ -68,6 +68,27 @@ def readable_gene_names(adata, say=print):
     return options[coded or "row names"]
 
 
+def family_of(cell_type):
+    """Group a cell type name into its family (v3 splits e.g. B cells into naive, memory, plasma...)."""
+    import re
+    n = str(cell_type).lower()
+    if "nkt" in n or re.search(r"\bt cells?\b|t follicular|t helper|regulatory t|treg|mait|gamma.?delta", n):
+        return "T Cells"
+    if re.search(r"\bnk\b|natural killer", n):
+        return "NK Cells"
+    if "dendritic" in n or re.search(r"\b(c?dc\d?|pdc|asdc)\b", n):  # before B cells: "Plasmacytoid Dendritic"
+        return "Dendritic Cells"
+    if "plasma" in n or re.search(r"\bb cells?\b", n):
+        return "B Cells"
+    if "monocyte" in n or "macrophage" in n:
+        return "Monocytes"
+    if "progenitor" in n or "hspc" in n:
+        return "Progenitors"
+    if "proliferating" in n or "cycling" in n:
+        return "Proliferating Cells"
+    return "Other"
+
+
 def text(col, missing="Unlabelled"):
     """Column as plain strings, with blanks filled in (pandas 3 keeps blanks as NaN after astype(str))."""
     return col.astype(object).where(col.notna(), missing).to_numpy(dtype=str)
