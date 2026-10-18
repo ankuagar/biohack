@@ -79,7 +79,9 @@ A yellow banner says "DEMO MODE: made-up numbers". The Flare Analyst needs AWS a
   date, such as his tumour surgery.
 - **Compare conditions**: IBD vs cancer. How genes change during IBD flares compared with how Sid's genes change
   after vs before a date (default: his tumour surgery), plus Crohn's vs ulcerative colitis. Compares *changes*, not raw
-  levels, so differences between people and lab kits largely cancel out; similarity = correlation of changes.
+  levels, so differences between people and lab kits largely cancel out; similarity = correlation of changes. The page
+  also ranks a small set of checkpoint and trafficking genes as target hypotheses, then keeps the Sid-specific B7-H3 /
+  EphA2 binder hypotheses separate because blood immune data does not measure tumor-surface abundance.
 - **Cell map**: every kind of immune cell as islands of dots; lasso a group to see what's in it.
 - **Genes**: which genes switch on or off during a flare inside each cell type.
 - **How we checked**: junk removed, lab batches, freezer time, steroids, correction for testing many things, and

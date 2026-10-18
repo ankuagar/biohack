@@ -24,6 +24,20 @@ STATE_COLORS = {"Feeling fine": FINE, "Flare": FLARE}
 LEVEL_NAMES = {"family": "Cell families", "broad": "Main cell types", "detailed": "Detailed cell types",
                "tcell": "T-cell subsets"}
 
+# Interpretation aids for the target-discovery view. These descriptions do not validate a target;
+# the observed ImYoo/Sid changes still need biological and experimental confirmation.
+TARGET_CONTEXT = {
+    "PDCD1": ("Checkpoint receptor", "blocking antibody or ligand modulator"),
+    "LAG3": ("Checkpoint receptor", "blocking antibody or ligand modulator"),
+    "HAVCR2": ("Checkpoint receptor", "blocking antibody or ligand modulator"),
+    "TIGIT": ("Checkpoint receptor", "blocking antibody or ligand modulator"),
+    "CTLA4": ("Checkpoint receptor", "blocking antibody or ligand modulator"),
+    "ITGA4": ("Cell trafficking", "blocking antibody or small-molecule modulator"),
+    "ITGB7": ("Cell trafficking", "blocking antibody or small-molecule modulator"),
+    "ITGAE": ("Cell adhesion", "blocking antibody or small-molecule modulator"),
+    "CCR9": ("Cell trafficking", "blocking antibody or small-molecule modulator"),
+}
+
 
 JUNK = "artifact|Debris|Multiplet|Unknown|Unlabelled|Platelet"
 # cell-type colours: deliberately avoid the flare orange and feeling-fine blue
@@ -452,6 +466,21 @@ def classify(a, b, size=0.5):
     return np.select([up_a & up_b, dn_a & dn_b, (up_a & dn_b) | (dn_a & up_b), up_a | dn_a, up_b | dn_b],
                      ["Up in both", "Down in both", "Opposite directions", "First only", "Second only"],
                      default="Little change")
+
+
+def classify_one(a, b, size=0.5):
+    """Scalar form of classify for tables; avoids zero-dimensional NumPy values in Streamlit dataframes."""
+    if a > size and b > size:
+        return "Up in both"
+    if a < -size and b < -size:
+        return "Down in both"
+    if (a > size and b < -size) or (a < -size and b > size):
+        return "Opposite directions"
+    if abs(a) > size:
+        return "IBD only"
+    if abs(b) > size:
+        return "Sid only"
+    return "Little change"
 
 
 COMPARE_COLORS = {"Up in both": FLARE, "Down in both": FINE, "Opposite directions": "#8e44ad",
@@ -1532,6 +1561,65 @@ elif page == "Compare conditions":
                    "'brakes' PD-1, CTLA-4 and LAG-3 to release killer T cells; the IBD drug vedolizumab blocks α4β7 "
                    "(ITGA4 + ITGB7) so immune cells can't enter the gut. Shared programs suggest shared drug effects "
                    "(and side effects); different programs suggest more targeted options.")
+
+        st.subheader("3. Target discovery for synthetic design")
+        st.markdown("This panel turns the cross-dataset comparison into a short list of **testable target hypotheses**. "
+                    "A target is more interesting when it changes clearly in both settings and belongs to a class that "
+                    "could support a drug or protein binder. This is a prioritisation aid, not evidence that a treatment works.")
+        target_rows = panel[panel["gene"].isin(TARGET_CONTEXT)].copy()
+        target_rows["target class"] = target_rows["gene"].map(lambda g: TARGET_CONTEXT[g][0])
+        target_rows["candidate modality"] = target_rows["gene"].map(lambda g: TARGET_CONTEXT[g][1])
+        target_rows["pattern"] = [classify_one(a, b, 0.5) if pd.notna(a) and pd.notna(b)
+                                   else ("IBD only" if pd.notna(a) else "Sid only")
+                                   for a, b in zip(target_rows["IBD flare"], target_rows["Sid"])]
+        target_rows["shared strength"] = np.minimum(target_rows["IBD flare"].abs(), target_rows["Sid"].abs())
+        target_rows = target_rows.sort_values(["pattern", "shared strength"], ascending=[True, False])
+        if target_rows.empty:
+            st.info("The selected comparison does not contain any measured checkpoint or trafficking genes. "
+                    "Choose a cell type with the CD8 panel, then rebuild both pseudobulk summaries if needed.")
+        else:
+            candidate_display = target_rows[["gene", "program", "IBD flare", "Sid", "pattern", "target class",
+                                             "candidate modality"]].rename(columns={
+                                                 "gene": "Gene", "program": "Program", "IBD flare": "IBD Δ",
+                                                 "Sid": "Sid Δ", "pattern": "Observed pattern",
+                                                 "target class": "Target class", "candidate modality": "Possible modality"})
+            candidate_display["IBD Δ"] = candidate_display["IBD Δ"].map(lambda x: "—" if pd.isna(x) else f"{x:+.2f}")
+            candidate_display["Sid Δ"] = candidate_display["Sid Δ"].map(lambda x: "—" if pd.isna(x) else f"{x:+.2f}")
+            st.dataframe(candidate_display, hide_index=True, width="stretch")
+            measured = target_rows.dropna(subset=["IBD flare", "Sid"])
+            if len(measured):
+                fig = px.scatter(measured, x="IBD flare", y="Sid", color="program", hover_name="gene",
+                                 hover_data={"IBD flare": ":+.2f", "Sid": ":+.2f", "target class": True,
+                                             "program": False},
+                                 labels={"IBD flare": "IBD flare − calm gene activity (log₂)",
+                                         "Sid": "Sid after − before selected date (log₂)", "program": "Program"})
+                fig.update_traces(marker=dict(size=10, opacity=0.85, line=dict(width=1, color="white")))
+                fig.add_hline(y=0, line_color=GREY, line_width=1)
+                fig.add_vline(x=0, line_color=GREY, line_width=1)
+                fig.update_layout(title="Druggable immune programs: shared change is top-right or bottom-left",
+                                  height=460, legend=dict(title="Program", orientation="v", x=1.02, y=1,
+                                                         xanchor="left", yanchor="top"))
+                chart(fig)
+                shared = measured[measured["pattern"].isin(["Up in both", "Down in both"])]
+                if len(shared):
+                    genes = ", ".join(shared["gene"].tolist())
+                    st.markdown(f"**Shared-direction candidates in this view:** {genes}. These are the first genes "
+                                "to investigate for mechanism, existing compounds, and safety liabilities.")
+                else:
+                    st.info("No checkpoint or trafficking gene changes clearly in the same direction in both views. "
+                            "That is a result: the two immune contexts may need different intervention strategies.")
+
+        st.markdown("#### Patient-specific binder hypotheses")
+        st.markdown("Sid's tumor pathology identified **B7-H3/CD276** and **EphA2/EPHA2** as surface-protein "
+                    "candidates. The blood comparison above does not measure tumor-surface abundance, so these two "
+                    "targets need to be selected using Sid's tumor evidence and then designed as separate protein-binder "
+                    "candidates.")
+        st.dataframe(pd.DataFrame([
+            {"Target": "B7-H3 / CD276", "Evidence source": "Sid T3 tumor staining", "Design route": "Extracellular-domain binder", "Status": "Candidate; validate in tumor data"},
+            {"Target": "EphA2 / EPHA2", "Evidence source": "Sid T3 tumor staining", "Design route": "Extracellular-domain binder", "Status": "Candidate; validate in tumor data"},
+        ]), hide_index=True, width="stretch")
+        st.caption("The binder runbook is in binder_design/README.md. Candidates are computer-designed hypotheses, not drugs. "
+                   "Keep ImYoo, CentAI, and private Sid-derived summaries inside the approved AWS environment.")
 
     if SD is not None:
         sid_vs_ibd()
