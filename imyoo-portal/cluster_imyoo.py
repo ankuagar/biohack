@@ -51,7 +51,9 @@ def add_sample_labels(adata):
     def get(name, default):
         return text(obs[name]) if name in obs else pd.Series(default, index=obs.index)
     adata.obs["__sample"] = get("sample_id", "Unknown")
-    adata.obs["__person"] = get("participant_id", get("person", "Unknown"))
+    real = get("participant_id", get("person", "Unknown"))
+    alias = {p: f"P{i + 1:02d}" for i, p in enumerate(sorted(real.unique()))}  # same rule as precompute.py
+    adata.obs["__person"] = real.map(alias)  # never save ImYoo's real participant codes
     adata.obs["__flare"] = get("flare_status", get("flare", "Unknown"))
     adata.obs["__broad"] = get("cell_type_level_1", "Unknown")
     adata.obs["__detailed"] = get("cell_type_level_2", "Unknown")
