@@ -75,6 +75,8 @@ CSS = """
 [data-testid="stMetric"] {border: 1px solid rgba(128,128,128,.25); border-radius: 16px; padding: .85rem 1.05rem;
                           background: rgba(128,128,128,.05);}
 [data-testid="stExpander"] details {border-radius: 14px;}
+[data-testid="stPlotlyChart"] {margin: .25rem 0 .8rem;}
+[data-testid="stPlotlyChart"] > div {border-radius: 14px;}
 </style>
 """
 CSS_PRESENT = """
@@ -119,8 +121,32 @@ def goto(page_name, **state):
 
 
 def chart(fig, where=None, **kw):
-    """Plotly chart with consistent hover text and no Plotly logo. Returns the selection event if any."""
-    fig.update_layout(hoverlabel=dict(font_size=14), font=dict(size=13))
+    """Apply shared readable styling. Returns Plotly's selection event, when requested."""
+    # Transparent backgrounds let charts sit naturally in either Streamlit theme;
+    # restrained grid lines and consistent typography make unlike chart types feel related.
+    old_margin = fig.layout.margin
+    margin = {side: max(default, getattr(old_margin, side, None) or 0)
+              for side, default in (("l", 36), ("r", 88), ("t", 72), ("b", 72))}
+    margin.update(pad=5, autoexpand=True)
+    fig.update_layout(
+        font=dict(family="Inter, sans-serif", size=13, color=avg_color()),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        hoverlabel=dict(font_size=14, font_family="Inter, sans-serif", bgcolor="#172033",
+                        bordercolor="#172033", font=dict(color="#ffffff")),
+        margin=margin,
+        legend=dict(bgcolor="rgba(0,0,0,0)", borderwidth=0, font=dict(size=12),
+                    title_font=dict(size=12)),
+        modebar=dict(orientation="h", bgcolor="rgba(0,0,0,0)", color="#64748b",
+                     activecolor=FLARE),
+    )
+    if getattr(fig.layout.title, "text", None):
+        fig.update_layout(title_font=dict(size=16), title_x=0.02, title_xanchor="left")
+    fig.update_xaxes(automargin=True, title_standoff=12, showline=False, zerolinecolor="rgba(128,140,160,.35)",
+                     gridcolor="rgba(128,140,160,.16)", ticks="outside", ticklen=4,
+                     tickcolor="rgba(128,140,160,.35)")
+    fig.update_yaxes(automargin=True, title_standoff=12, showline=False, zerolinecolor="rgba(128,140,160,.35)",
+                     gridcolor="rgba(128,140,160,.16)", ticks="outside", ticklen=4,
+                     tickcolor="rgba(128,140,160,.35)")
     return (where or st).plotly_chart(fig, width="stretch", config={"displaylogo": False}, **kw)
 
 
@@ -452,7 +478,7 @@ def compare_scatter(df, xname, yname, xlab, ylab, size=0.5):
     fig.update_traces(marker=dict(size=5, opacity=0.7))
     fig.add_hline(y=0, line_color=GREY, line_width=1)
     fig.add_vline(x=0, line_color=GREY, line_width=1)
-    fig.update_layout(height=520)
+    fig.update_layout(title=f"Gene activity change: {xname} compared with {yname}", height=520)
     return fig, rho, df
 
 
@@ -491,9 +517,11 @@ def signature_bar(res):
     fig = px.bar(res.sort_values("change"), x="change", y="cell type", orientation="h", color="direction", text="label",
                  color_discrete_map={"Up in flare": FLARE, "Down in flare": FINE, "No clear change": GREY},
                  hover_data={"people up": True, "people": True, "adjusted p": ":.3f"},
-                 labels={"change": "Average change in share of immune cells (percentage points)", "cell type": ""})
+                 labels={"change": "Average change in immune cell share (percentage points)",
+                         "cell type": "Cell type"})
     fig.update_traces(textposition="outside", cliponaxis=False)
-    fig.update_layout(height=max(350, 28 * len(res)), legend_title_text="")
+    fig.update_layout(title="How each cell type changes during a flare",
+                      height=max(350, 28 * len(res)), legend_title_text="")
     return fig
 
 
@@ -518,15 +546,27 @@ def slope_chart(pairs, value_label, title):
         up = r["Flaring"] > r["Baseline"]
         fig.add_trace(go.Scatter(
             x=["Feeling fine", "Flare"], y=[r["Baseline"], r["Flaring"]], mode="lines+markers",
-            line=dict(color=FLARE if up else FINE, width=2), marker=dict(size=7), opacity=0.75,
+            line=dict(color=FLARE if up else FINE, width=1.4), marker=dict(size=5), opacity=0.42,
             name=r["person"], hovertemplate=f"{r['person']}<br>%{{x}}: %{{y:.2f}}<extra></extra>",
             showlegend=False))
+    # Per-person traces are intentionally hidden from the legend to avoid a long
+    # list of IDs. Add a compact key that explains their colour instead.
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines+markers", name="Person: higher in flare",
+                             line=dict(color=FLARE, width=3), marker=dict(size=7),
+                             hoverinfo="skip", legendrank=1))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines+markers", name="Person: lower in flare",
+                             line=dict(color=FINE, width=3), marker=dict(size=7),
+                             hoverinfo="skip", legendrank=2))
     fig.add_trace(go.Scatter(
         x=["Feeling fine", "Flare"], y=[pairs["Baseline"].mean(), pairs["Flaring"].mean()],
         mode="lines+markers", line=dict(color=avg_color(), width=5), marker=dict(size=12),
-        name="Average", hovertemplate="Average %{x}: %{y:.2f}<extra></extra>"))
-    fig.update_layout(title=title, yaxis_title=value_label, height=460, margin=dict(t=60, b=20),
-                      xaxis=dict(range=[-0.25, 1.25]))
+        name="Study average", hovertemplate="Study average %{x}: %{y:.2f}<extra></extra>", legendrank=3))
+    fig.update_layout(title=dict(text=title, x=0.02, y=0.98, xanchor="left", yanchor="top"),
+                      yaxis_title=value_label, height=500,
+                      margin=dict(t=92, b=78, l=72, r=250),
+                      xaxis=dict(range=[-0.25, 1.25], title="Blood sample condition"),
+                      legend=dict(title="Lines", orientation="v", y=0.98, x=1.02,
+                                  xanchor="left", yanchor="top"))
     return fig
 
 
@@ -594,7 +634,8 @@ def analyst_tools():
         fig = px.bar(top.sort_values("change"), x="change", y="gene", orientation="h",
                      color=np.where(top.sort_values("change")["change"] > 0, "More active in flare", "Less active in flare"),
                      color_discrete_map={"More active in flare": FLARE, "Less active in flare": FINE},
-                     labels={"change": "Change during flare (log2)", "gene": "", "color": ""})
+                     labels={"change": "Change in gene activity during flare (log2)", "gene": "Gene", "color": ""})
+        fig.update_layout(title="Genes with the largest flare related activity changes")
         fig.update_layout(height=max(300, 26 * len(top)), legend_title_text="")
         return ({"genes_passing_adjusted_p_0.1": int((g["padj"] < 0.1).sum()), "genes_tested": len(g),
                  "top_genes": top[["gene", "change", "people_up", "people", "padj"]].to_dict("records")}, fig)
@@ -613,7 +654,8 @@ def analyst_tools():
                         "p_flare_soon_higher": mannwhitneyu(soon, rest, alternative="greater").pvalue})
         fig = px.strip(scored.dropna(subset=["score"]), x="state", y="score", color="state",
                        color_discrete_map=STATE_COLORS, labels={"state": "", "score": "Score"})
-        fig.update_layout(height=300, showlegend=False)
+        fig.update_layout(title="Flare score in flare and calm samples", height=300, showlegend=False,
+                          xaxis_title="Sample status")
         return out, fig
 
     def red_flag(limit, group):
@@ -727,9 +769,10 @@ elif page == "The study":
                      hover_data={"disease": True, "n_cells": ":,", "day": ":.0f",
                                  **({"age": ":.0f"} if "age" in s else {}),
                                  **({"steroid_hours": ":.0f"} if "steroid_hours" in s else {})},
-                     labels={"day": "Days since this person's first sample", "person": "", "state": ""})
+                     labels={"day": "Days since each person's first sample", "person": "Participant", "state": ""})
     fig.update_yaxes(categoryorder="category descending")
-    fig.update_layout(height=max(400, 22 * s["person"].nunique()), legend=dict(orientation="h", y=1.05),
+    fig.update_layout(title="When each participant gave a blood sample",
+                      height=max(400, 22 * s["person"].nunique()), legend=dict(orientation="h", y=1.05),
                       clickmode="event+select")
     event = chart(fig, on_select="rerun", selection_mode="points", key="study_pick")
     picked = [p for p in (event.selection.points if event else []) if p.get("customdata")]
@@ -769,13 +812,14 @@ elif page == "A person's journey":
     order = (s["day"].map(lambda d: f"Day {d:.0f}") + " · " + s["state"]).tolist()
     fig = px.bar(c, x="label", y="pct", color="cell_type", category_orders={"label": order},
                  color_discrete_map=type_colors(level), color_discrete_sequence=DETAIL_PALETTE,
-                 labels={"label": "", "pct": "% of immune cells", "cell_type": "Cell type"})
+                 labels={"label": "Sample date and status", "pct": "Immune cells (%)", "cell_type": "Cell type"})
     for i, st_ in enumerate(s["state"]):
         if st_ == "Flare":
             fig.add_vrect(x0=i - 0.5, x1=i + 0.5, fillcolor=FLARE, opacity=0.25, line_width=0, layer="below",
                           annotation_text="Flare", annotation_position="top",
                           annotation_font_color=FLARE)
-    fig.update_layout(height=480, barmode="stack")
+    fig.update_layout(title="Immune cell mix in each blood sample", height=480, barmode="stack",
+                      xaxis_title="Sample date and flare status", yaxis_title="Share of immune cells (%)")
     chart(fig)
     st.caption("Shaded columns are flares. Each bar is that day's mix of immune cells.")
     if s["flare"].nunique() == 2:
@@ -884,7 +928,8 @@ elif page == "Seeing a flare coming":
     fig = px.strip(scored.dropna(subset=["score"]), x="state", y="score", color="state",
                    color_discrete_map=STATE_COLORS, hover_data={"person": True, "day": ":.0f"},
                    labels={"state": "", "score": score_label})
-    fig.update_layout(height=320, showlegend=False, margin=dict(t=10))
+    fig.update_layout(title="Flare score by sample status", height=320, showlegend=False,
+                      xaxis_title="Sample status")
     chart(fig, where=c2)
     if weights is not None:
         with st.expander("Which cell types drive the score?"):
@@ -893,7 +938,7 @@ elif page == "Seeing a flare coming":
             w["pushes toward"] = np.where(w["weight"] > 0, "Flare", "Feeling fine")
             fig = px.bar(w, x="weight", y="cell type", orientation="h", color="pushes toward",
                          color_discrete_map={"Flare": FLARE, "Feeling fine": FINE}, labels={"cell type": ""})
-            fig.update_layout(height=360, legend_title_text="")
+            fig.update_layout(title="Cell types that drive the flare score", height=360, legend_title_text="")
             chart(fig)
 
     st.subheader("2. Countdown: calm samples before a flare")
@@ -913,7 +958,7 @@ elif page == "Seeing a flare coming":
         fig.add_vrect(x0=0, x1=window, fillcolor=FLARE, opacity=0.08, line_width=0, layer="below",
                       annotation_text="flare coming", annotation_position="top left")
         fig.update_xaxes(autorange="reversed")
-        fig.update_layout(height=430)
+        fig.update_layout(title="Calm sample scores as the next flare approaches", height=430)
         chart(fig)
         trend = "rises" if rho < 0 else "falls"
         st.markdown(f"Read right to left: as a flare gets closer, the score **{trend}** "
@@ -935,7 +980,8 @@ elif page == "Seeing a flare coming":
                      color_discrete_map={f"Flare within {window} days": FLARE, "No flare that soon": FINE},
                      hover_data={"person": True, "days_to_flare": ":.0f"},
                      labels={"kind": "", "score": score_label + " (calm sample)"})
-        fig.update_layout(height=380, showlegend=False)
+        fig.update_layout(title=f"Scores in calm samples: flare within {window} days or not",
+                          height=380, showlegend=False, xaxis_title="Next flare timing")
         chart(fig)
         st.markdown(f"Calm samples with a flare coming: median score **{a.median():.2f}** ({len(a)} samples) vs "
                     f"**{b.median():.2f}** for the rest ({len(b)} samples); "
@@ -962,7 +1008,8 @@ elif page == "Seeing a flare coming":
                        labels={"state": "", "score": "Change in B cells vs own calm level (percentage points)"})
         fig.add_hline(y=limit, line_dash="dash", line_color=avg_color(),
                       annotation_text=f"red flag: +{limit} points", annotation_position="top right")
-        fig.update_layout(height=380, showlegend=False)
+        fig.update_layout(title="B cell changes in flare and calm samples", height=380, showlegend=False,
+                          xaxis_title="Sample status")
         chart(fig)
         if len(fl_hit):
             alarm = "no false alarms" if len(ca_hit) == 0 else f"{len(ca_hit)} false alarm(s)"
@@ -999,7 +1046,9 @@ elif page == "Seeing a flare coming":
                                  mode="markers", name="Shuffled labels: 95% of runs below this",
                                  marker=dict(symbol="line-ew-open", size=40, line=dict(width=3, color=avg_color()))))
         fig.add_hline(y=0.5, line_dash="dot", line_color=GREY, annotation_text="coin toss", annotation_position="left")
-        fig.update_layout(height=380, yaxis=dict(range=[0, 1.08], tickformat=".0%", title="Correct ranking"),
+        fig.update_layout(title="How often each method ranks flare samples higher",
+                          height=380, xaxis_title="Scoring method",
+                          yaxis=dict(range=[0, 1.08], tickformat=".0%", title="Correct ranking"),
                           legend=dict(orientation="h", y=1.12))
         chart(fig)
         st.dataframe(tab.style.format({"correct ranking": "{:.0%}", "shuffled labels (average)": "{:.0%}",
@@ -1047,7 +1096,7 @@ elif page == "Ask the Flare Analyst":
             with st.chat_message("assistant", avatar="🔬"):
                 st.markdown(f"_{analyst.describe_call(item['name'], item['input'])}_")
                 if item["fig"] is not None:
-                    st.plotly_chart(item["fig"], width="stretch", key=f"fig{item['n']}")
+                    chart(item["fig"], key=f"fig{item['n']}")
                 with st.expander("Numbers Claude saw"):
                     st.json(item["result"])
 
@@ -1157,8 +1206,8 @@ elif page == "My immune report":
                       "higher than %{customdata[1]:.0f}% of calm samples<extra></extra>"))
     fig.add_vline(x=0, line_color=avg_color(), line_width=1)
     fig.update_yaxes(tickvals=list(range(len(fams))), ticktext=fams, autorange="reversed")
-    fig.update_layout(height=60 + 48 * len(fams), xaxis_title="Points above (+) or below (−) your normal share",
-                      margin=dict(t=10))
+    fig.update_layout(title="This sample versus your usual cell mix", height=80 + 48 * len(fams),
+                      xaxis_title="Change from your normal (percentage points)")
     chart(fig)
     st.caption("Grey band = a typical calm day: where 90% of feeling-fine samples in the study fall, each compared "
                "with that person's own normal. Orange dots are outside it. Hover a dot for its percentile.")
@@ -1183,7 +1232,8 @@ elif page == "My immune report":
         sel = ts[ts["sample_id"] == sample]
         fig.add_trace(go.Scatter(x=sel["day"], y=sel["b"], mode="markers", name="this sample",
                                  marker=dict(size=22, color="rgba(0,0,0,0)", line=dict(width=3, color=avg_color()))))
-        fig.update_layout(height=380, xaxis_title="Days since first sample", yaxis_title="% of immune cells",
+        fig.update_layout(title=f"{person}'s B cell share across blood samples", height=380,
+                          xaxis_title="Days since first sample", yaxis_title="B cells (% of immune cells)",
                           legend=dict(orientation="h", y=1.12))
         chart(fig)
 
@@ -1242,15 +1292,16 @@ elif page == "Sid's journey":
     top_n = c2.slider("Families to show", 3, 15, 8)
     order = cl.groupby("family")["pct"].max().sort_values(ascending=False).index[:top_n]
     fig = px.line(cl[cl["family"].isin(order)].sort_values("date"), x="date", y="pct", color="family", markers=True,
-                  hover_data={"clone": True}, labels={"date": "", "pct": "% of his T cells", "family": ""})
+                  hover_data={"clone": True}, labels={"date": "Blood draw date", "pct": "Share of T cells (%)",
+                                                       "family": "T cell family"})
     mark_events(fig, events, start, end)
-    fig.update_layout(height=420)
+    fig.update_layout(title="T cell families across blood draws", height=420)
     chart(fig, where=c1)
     fig = px.line(dv.sort_values("date"), x="date", y="effective_families", markers=True,
-                  labels={"date": "", "effective_families": "Effective number of families"})
+                  labels={"date": "Blood draw date", "effective_families": "Effective number of T cell families"})
     fig.update_traces(line_color=FINE)
     mark_events(fig, events, start, end)
-    fig.update_layout(height=280, margin=dict(t=30))
+    fig.update_layout(title="T cell family diversity over time", height=280)
     chart(fig, where=c2)
     c2.caption("Falls when a few families take over (a focused response), rises when many share the space.")
 
@@ -1271,8 +1322,9 @@ elif page == "Sid's journey":
         fig = px.bar(ba.reset_index(), x="change", y="family", orientation="h", color="direction",
                      color_discrete_map={"Grew after": FLARE, "Shrank after": FINE},
                      hover_data={"before": ":.2f", "after": ":.2f"},
-                     labels={"change": "Change in share of his T cells (percentage points)", "family": ""})
-        fig.update_layout(height=420, legend_title_text="")
+                     labels={"change": "Change in T cell share (percentage points)", "family": "T cell family"})
+        fig.update_layout(title="Change in T cell family share after the selected date",
+                          height=420, legend_title_text="")
         chart(fig, where=c1)
         nb, na = before["date"].nunique(), after["date"].nunique()
         c2.metric("Draws before", nb)
@@ -1288,10 +1340,11 @@ elif page == "Sid's journey":
         st.info("Need blood draws on both sides of that date.")
 
     st.subheader("Blood draws")
-    fig = px.bar(draws.sort_values("date"), x="date", y="n_cells", labels={"date": "", "n_cells": "cells"})
+    fig = px.bar(draws.sort_values("date"), x="date", y="n_cells",
+                 labels={"date": "Blood draw date", "n_cells": "Cells captured"})
     fig.update_traces(marker_color=GREY)
     mark_events(fig, events, start, end)
-    fig.update_layout(height=260, margin=dict(t=30))
+    fig.update_layout(title="Cells captured at each blood draw", height=260)
     chart(fig)
     notes = []
     if si.get("dates_unreadable"):
@@ -1312,9 +1365,10 @@ elif page == "Sid's journey":
         c = comp[comp["level"] == level]
         fig = px.area(c.sort_values("date"), x="date", y="pct", color="cell_type", markers=True,
                       color_discrete_map=type_colors(level), color_discrete_sequence=DETAIL_PALETTE,
-                      labels={"date": "", "pct": "% of immune cells", "cell_type": "Cell type"})
+                      labels={"date": "Blood draw date", "pct": "Immune cells (%)", "cell_type": "Cell type"})
         mark_events(fig, events, start, end)
-        fig.update_layout(height=420, legend=dict(orientation="h", y=-0.15))
+        fig.update_layout(title="Immune cell composition across blood draws", height=420,
+                          legend=dict(orientation="h", y=-0.15))
         chart(fig)
 
     st.subheader("His cell map")
@@ -1329,7 +1383,8 @@ elif page == "Sid's journey":
     fig.update_traces(marker=dict(size=2.5, opacity=0.6))
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False)
-    fig.update_layout(height=600, legend=dict(itemsizing="constant"))
+    fig.update_layout(title="Map of cells, grouped by similarity", height=600,
+                      legend=dict(itemsizing="constant"))
     chart(fig)
 
     st.subheader("How the cells were labelled (honestly)")
@@ -1357,7 +1412,7 @@ elif page == "Sid's journey":
     mk = SD["markers"].set_index("predicted family")
     fig = px.imshow(mk, aspect="auto", color_continuous_scale="Oranges",
                     labels=dict(x="Marker gene", y="Labelled as", color="Activity"))
-    fig.update_layout(height=280, margin=dict(t=10))
+    fig.update_layout(title="Marker activity supporting each cell group label", height=280)
     chart(fig)
 
     st.subheader("⚠️ Keep in mind")
@@ -1463,7 +1518,9 @@ elif page == "Compare conditions":
                                        text=np.where(np.isnan(z), "not measured", np.round(z, 2).astype(str)),
                                        texttemplate="%{text}", hovertemplate="%{y} · %{x}: %{z:.2f}<extra></extra>"))
             fig.update_yaxes(autorange="reversed")
-            fig.update_layout(height=26 * len(shown) + 80, margin=dict(t=10, l=10))
+            fig.update_layout(title="Direction of change in selected inflammation genes",
+                              height=26 * len(shown) + 100, xaxis_title="Study and comparison",
+                              yaxis_title="Gene", margin=dict(t=72, l=36))
             chart(fig)
             agree = shown.dropna()
             same_dir = int((np.sign(agree["IBD flare"]) == np.sign(agree["Sid"])).sum())
@@ -1574,15 +1631,20 @@ elif page == "Genes":
     fig = px.scatter(g, x="change", y="-log10 p", color="direction", hover_name="gene",
                      color_discrete_map={"Up in flare": FLARE, "Down in flare": FINE, "No clear change": GREY},
                      hover_data={"people_up": True, "people": True, "padj": ":.3g", "-log10 p": False},
-                     labels={"change": "Change during flare (log2, + = more active)",
-                             "-log10 p": "Strength of evidence (higher = stronger)"}, render_mode="webgl")
+                     labels={"change": "Flare − feeling-fine gene activity (log₂ difference)",
+                             "-log10 p": "Statistical evidence: −log₁₀(p) (higher = stronger)"}, render_mode="webgl")
     fig.update_traces(marker=dict(size=5))
-    for _, r in g.sort_values("p").head(12).iterrows():  # name the strongest genes right on the chart
-        fig.add_annotation(x=r["change"], y=r["-log10 p"], text=r["gene"], showarrow=False, yshift=9,
-                           font=dict(size=11))
-    fig.update_layout(height=480, legend_title_text="")
+    fig.add_vline(x=0, line_color=GREY, line_width=1)
+    for i, (_, r) in enumerate(g.sort_values("p").head(6).iterrows()):
+        # Label only the six strongest points; the rest remain available on hover.
+        fig.add_annotation(x=r["change"], y=r["-log10 p"], text=r["gene"], showarrow=True,
+                           arrowhead=0, arrowwidth=1, arrowcolor=GREY, ax=0,
+                           ay=-18 if i % 2 == 0 else 18, font=dict(size=10))
+    fig.update_layout(title=f"Gene activity changes during flares in {ct}", height=480, legend_title_text="")
     chart(fig)
-    st.caption("The 12 genes with the strongest evidence are named on the chart; hover any dot for its name.")
+    st.caption("Each dot is one gene in the selected cell type. Right of zero means more active during flares; left "
+               "means less active. Higher dots have stronger evidence for a flare-related change. The six strongest "
+               "genes are labelled; hover any dot to see its name and statistics.")
     top = g.sort_values("p").head(30)
     gene = st.selectbox("Look at one gene", top["gene"].tolist() + sorted(set(g["gene"]) - set(top["gene"])))
     pb = D["pseudobulk"]
@@ -1592,8 +1654,10 @@ elif page == "Genes":
     r = g[g["gene"] == gene].iloc[0]
     st.markdown(f"**{gene}** in {ct}: more active during flare in **{int(r['people_up'])} of {int(r['people'])}** people "
                 f"(adjusted p {pval_text(r['padj'])}).")
-    st.plotly_chart(slope_chart(pairs, "Gene activity (log2 counts per million)", f"{gene} in {ct}"),
-                    width="stretch")
+    chart(slope_chart(pairs, "Mean gene activity (log₂ counts per million)",
+                      f"{gene} activity in {ct}: flare vs feeling fine"))
+    st.caption("Each faint line is one person, averaged across their samples in each state. Orange means that person's "
+               "gene activity is higher during flares; blue means lower. The dark thick line is the study average.")
     with st.expander("Top 30 genes"):
         st.dataframe(top[["gene", "change", "people_up", "people", "p", "padj"]].round(4), hide_index=True)
 
