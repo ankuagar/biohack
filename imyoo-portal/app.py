@@ -1494,6 +1494,13 @@ elif page == "Sid cluster bridge":
         selected_type = st.selectbox("Sid cell group", cell_types, index=cell_types.index(default_type),
                                      help="Sid's pseudobulk summaries are grouped by blood draw and predicted cell family.")
         cluster_ids = sorted(scores["cluster"].astype(str).unique(), key=lambda x: int(x) if x.isdigit() else x)
+        matched_clusters = bridge_info.get("clusters_with_matches", len(cluster_ids))
+        null_count = bridge_info.get("null_sets_per_cluster", "not generated") if null_scores is not None else "not generated"
+        kpis([("✅", f"{matched_clusters}/{len(cluster_ids)}", "ImYoo clusters matched"),
+              ("🩸", bridge_info.get("sid_rows", len(scores)), "Sid draw-group rows"),
+              ("🎲", null_count, "random sets per cluster"),
+              ("🔬", "Program match", "evidence tier")])
+        st.caption("This is a cross-dataset gene-program comparison. It does not transfer cell labels, prove treatment effects, or validate a drug target.")
         cluster_summary = D.get("cluster_summary")
         summary_by_cluster = {}
         if cluster_summary is not None and "cluster" in cluster_summary:
