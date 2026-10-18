@@ -12,6 +12,7 @@ Built for the [SPC Bio-Data Hackathon](https://www.southparkcommons.com/bio-data
 | `sid_inspect.py` | Prints the structure of Sid Sijbrandij's public files (catalogue + blood single-cell file) | SageMaker |
 | `sid_precompute.py` | Labels groups of Sid's blood cells (T-cell receptors + a model taught on ImYoo's cells + marker genes) and summarises his T-cell families over time | SageMaker |
 | `sid_pseudobulk.py` | Gene activity per blood draw and cell family for Sid (reuses the group labels; no model re-run), for comparing IBD with cancer | SageMaker |
+| `sid_cluster_bridge.py` | Scores ImYoo cluster marker programs in Sid's compact blood-draw summaries; does not transfer cell labels | SageMaker |
 | `flare_classifier.py` | Trains simple flare-vs-calm models on ImYoo's samples (cell mix, gene activity, each vs own normal), tests each on people it never saw, with a shuffle test | SageMaker |
 | `cluster_imyoo.py` | Finds unsupervised Leiden clusters from the single-cell expression representation, computes UMAP coordinates and marker genes, and writes compact portal tables | SageMaker only (real data) |
 | `cluster_study.py` | Compares Leiden resolutions and neighbor graphs, writes cluster composition and stability tables | AWS HealthOmics container |
@@ -97,6 +98,8 @@ A yellow banner says "DEMO MODE: made-up numbers". The Flare Analyst needs AWS a
   enrichment, and top marker genes. Cluster labels are exploratory and do not replace biological annotation.
 - **Cluster studies**: compares multiple resolutions and neighbor graphs, with configuration stability and cluster
   composition by flare status, person, sample, and existing cell labels.
+- **Sid cluster bridge**: scores Sid's compact blood-draw summaries against the marker-gene programs found in each
+  ImYoo cluster. This compares shared gene programs across datasets; it does not transfer ImYoo cell labels to Sid.
 - **Genes**: which genes switch on or off during a flare inside each cell type.
 - **How we checked**: junk removed, lab batches, freezer time, steroids, correction for testing many things, and
   whether the finding holds in Crohn's and ulcerative colitis separately.
@@ -113,9 +116,17 @@ aws s3 cp s3://sid-sijbrandij-osteosarc-dataset/hudson_lab/PBMC_scRNAseq/seurat_
 aws s3 cp s3://sid-sijbrandij-osteosarc-dataset/hudson_lab/PBMC_scRNAseq/cellranger/2026-02-13/2026-02-13_capture1/outs/multi/count/raw_feature_bc_matrix/features.tsv.gz ~/data/sid/ --region us-west-2 --no-sign-request
 cd ~/imyoo-portal && python sid_precompute.py
 python sid_pseudobulk.py   # gene activity per draw, for 'Compare conditions' (~5 minutes)
+python sid_cluster_bridge.py  # score ImYoo cluster marker programs in Sid's blood draws
 ```
 It also needs the ImYoo file in `~/data/` (it learns cell types from it) and takes about 7 minutes. The gene table
 (`features.tsv.gz`) lets it match gene names between the two files. Output goes to `data/sid/`; the portal picks it up.
+
+The bridge reads the compact `data/cluster_markers.parquet` and `data/sid/pseudobulk.parquet` tables. It writes
+`data/sid_cluster_scores.parquet`, `data/sid_cluster_bridge_summary.parquet`, and
+`data/sid_cluster_bridge_info.json`; these are ignored data artifacts and should stay on the SageMaker machine.
+Refresh the portal and open **🔗 Sid cluster bridge**. A score is standardized within each Sid cell group across
+draws, using the shared marker genes of one ImYoo cluster. It is exploratory evidence for a related biological program, not a claim
+that Sid's cells belong to that ImYoo cluster or that the program is a drug target.
 
 **What we learned:** a model taught on ImYoo's cells wasn't reliable on Sid's cells on its own, because the two labs
 used different kits. Labelling groups of similar cells, anchored on T-cell receptors, was.

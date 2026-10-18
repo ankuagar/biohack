@@ -52,7 +52,7 @@ st.set_page_config(page_title="ImYoo Flare Explorer", page_icon="🩸", layout="
 
 PAGES = {"Home": "🏠", "The study": "🗓️", "A person's journey": "👤", "Flare signature": "📊",
          "Seeing a flare coming": "🔮", "Ask the Flare Analyst": "💬", "My immune report": "📋",
-         "Sid's journey": "🦴", "Compare conditions": "🔀",
+         "Sid's journey": "🦴", "Sid cluster bridge": "🔗", "Compare conditions": "🔀",
          "Unsupervised clusters": "🧩", "Cluster studies": "🧪", "Cell map": "🗺️", "Genes": "🧬", "How we checked": "✅"}
 
 CSS = """
@@ -190,7 +190,8 @@ def load():
         f"{DATA}/{name}" for name in
         ["cluster_cells.parquet", "cluster_summary.parquet", "cluster_markers.parquet", "cluster_info.json",
          "cluster_study_cells.parquet", "cluster_study_summary.parquet", "cluster_study_stability.parquet",
-         "cluster_study_info.json"]
+         "cluster_study_info.json", "sid_cluster_scores.parquet", "sid_cluster_bridge_summary.parquet",
+         "sid_cluster_bridge_info.json"]
         if os.path.exists(f"{DATA}/{name}")
     ]
     built_at = max(os.path.getmtime(path) for path in tracked)
@@ -215,6 +216,11 @@ def _load(built_at):
         d[name] = pd.read_parquet(f) if os.path.exists(f) else None
     study_info = f"{DATA}/cluster_study_info.json"
     d["cluster_study_info"] = json.load(open(study_info)) if os.path.exists(study_info) else None
+    for name in ["sid_cluster_scores", "sid_cluster_bridge_summary"]:
+        f = f"{DATA}/{name}.parquet"
+        d[name] = pd.read_parquet(f) if os.path.exists(f) else None
+    bridge_info = f"{DATA}/sid_cluster_bridge_info.json"
+    d["sid_cluster_bridge_info"] = json.load(open(bridge_info)) if os.path.exists(bridge_info) else None
     with open(f"{DATA}/info.json") as f:
         d["info"] = json.load(f)
     d["samples"]["state"] = d["samples"]["flare"].map(STATE)
@@ -1466,6 +1472,52 @@ elif page == "Sid's journey":
                 "- **A T-cell-focused collection:** the overall cell mix can't be read as changes in his blood.\n"
                 "- **Treatment dates aren't in the data**, so changes can't be tied to specific treatments, only "
                 "placed relative to his tumour sampling dates.")
+
+elif page == "Sid cluster bridge":
+    header("ImYoo cluster programs in Sid's blood", "Score Sid's blood-draw summaries for the gene programs that mark each ImYoo cluster.")
+    scores = D.get("sid_cluster_scores")
+    bridge_summary = D.get("sid_cluster_bridge_summary")
+    bridge_info = D.get("sid_cluster_bridge_info") or {}
+    if scores is None or bridge_summary is None:
+        st.info("The Sid cluster bridge has not been built yet. In SageMaker run `python sid_cluster_bridge.py` after `sid_pseudobulk.py` and copy the three bridge outputs into data/.")
+    else:
+        scores = scores.copy()
+        scores["date"] = pd.to_datetime(scores["date"], errors="coerce")
+        cell_types = sorted(scores["cell_type"].dropna().astype(str).unique())
+        default_type = "T Cells" if "T Cells" in cell_types else cell_types[0]
+        selected_type = st.selectbox("Sid cell group", cell_types, index=cell_types.index(default_type),
+                                     help="Sid's pseudobulk summaries are grouped by blood draw and predicted cell family.")
+        cluster_ids = sorted(scores["cluster"].astype(str).unique(), key=lambda x: int(x) if x.isdigit() else x)
+        selected_cluster = st.selectbox("ImYoo cluster marker program", cluster_ids,
+                                        help="This selects an ImYoo cluster's marker genes; it does not assign Sid's cells to that cluster.")
+        view = scores[(scores["cell_type"].astype(str) == selected_type) &
+                      (scores["cluster"].astype(str) == selected_cluster)].sort_values("date")
+        if view.empty:
+            st.info("No matched Sid draw summaries are available for this cell group and cluster.")
+        else:
+            fig = px.line(view, x="date", y="score", markers=True,
+                          hover_data={"date": True, "score": ":.2f", "n_cells": True, "genes_used": True},
+                          labels={"date": "Sid blood draw", "score": "Standardized ImYoo marker-program score"},
+                          title=f"ImYoo cluster {selected_cluster} program in Sid's {selected_type}")
+            sd = load_sid()
+            if sd is not None and not sd["events"].empty:
+                mark_events(fig, sd["events"], view["date"].min(), view["date"].max())
+            fig.update_layout(height=420, showlegend=False)
+            chart(fig)
+            st.caption("Scores are standardized within each Sid cell group across draws. A higher score means stronger relative activity of the ImYoo cluster's shared marker genes in that Sid group. This is a gene-program comparison, not a transferred cell label.")
+            split = st.date_input("Optional before/after date", value=view["date"].median().date(), key="sid_bridge_split")
+            split = pd.Timestamp(split)
+            before = view.loc[view["date"] < split, "score"]
+            after = view.loc[view["date"] >= split, "score"]
+            kpis([("🧬", int(view["n_genes_used"].max()), "shared marker genes used"),
+                  ("🩸", int(view["date"].nunique()), "Sid draws scored"),
+                  ("⬅️", f"{before.mean():+.2f}" if len(before) else "n/a", "mean score before"),
+                  ("➡️", f"{after.mean():+.2f}" if len(after) else "n/a", "mean score after")])
+            st.markdown("**Matched marker genes**")
+            one = bridge_summary[bridge_summary["cluster"].astype(str) == selected_cluster]
+            if not one.empty:
+                st.write(one[["marker_genes", "genes_used", "n_marker_genes", "n_genes_used"]].iloc[0].to_dict())
+        st.caption(f"Bridge used {bridge_info.get('clusters_with_matches', 'unknown')} ImYoo clusters with at least one matched gene. Sid's data are from one person and a different lab kit.")
 
 elif page == "Compare conditions":
     header("IBD vs cancer: do their immune changes look alike?",

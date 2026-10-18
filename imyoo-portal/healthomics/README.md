@@ -241,6 +241,20 @@ aws s3 cp "$STUDY_OUTPUT_URI/out/study_info/cluster_study_info.json" data/cluste
 
 The **🧪 Cluster studies** page will then be available.
 
+## Connect to Sid's data
+
+After copying the baseline clustering outputs and creating Sid's compact summaries, run the bridge on the same
+SageMaker machine that runs Streamlit:
+
+~~~bash
+cd ~/imyoo-portal
+python sid_cluster_bridge.py
+~~~
+
+Then refresh the portal and open **🔗 Sid cluster bridge**. The bridge scores shared marker-gene programs over Sid's
+blood draws; it does not assign Sid's cells to ImYoo clusters. See `../README.md` and `DETAILED_SETUP.md` for the
+full Sid preparation and interpretation notes.
+
 ## 5. Check status and get the results into the portal
 
 Check the workflow status:

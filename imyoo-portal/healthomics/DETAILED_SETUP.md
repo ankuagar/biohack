@@ -18,6 +18,10 @@ The workflow produces these files:
 - cluster_markers.parquet
 - cluster_info.json
 
+After the clustering run, the portal can compare its marker programs with Sid's public blood-draw summaries. This
+bridge is a local SageMaker step; it does not send Sid data through HealthOmics and does not require another 6 GB
+H5AD run.
+
 ## Terminal map
 
 | Run on | Use it for |
@@ -488,6 +492,35 @@ aws s3 cp "$STUDY_OUTPUT_URI/out/study_info/cluster_study_info.json" data/cluste
 ~~~
 
 The portal will then show **🧪 Cluster studies**.
+
+## 4B. Connect ImYoo cluster programs with Sid's data
+
+Run these commands in the **SageMaker terminal**, in `~/imyoo-portal`, after the baseline cluster outputs and Sid
+summaries exist:
+
+~~~bash
+cd ~/imyoo-portal
+
+# If needed, build Sid's compact summaries first (see the root README).
+python sid_precompute.py
+python sid_pseudobulk.py
+
+# Uses data/cluster_markers.parquet plus data/sid/pseudobulk.parquet.
+python sid_cluster_bridge.py
+
+ls -lh data/sid_cluster_*
+~~~
+
+The script writes three compact files into `data/`:
+
+- `sid_cluster_scores.parquet`: one score per Sid draw, Sid cell group, and ImYoo cluster.
+- `sid_cluster_bridge_summary.parquet`: marker genes used and how many matched Sid's gene table.
+- `sid_cluster_bridge_info.json`: provenance and interpretation metadata.
+
+Refresh Streamlit and open **🔗 Sid cluster bridge**. Select a Sid cell group and an ImYoo cluster marker program to
+see the score over Sid's draw dates. The score is standardized within each Sid cell group across draws, so it compares
+relative gene-program activity rather than raw counts. It is a cross-dataset program comparison, not transferred
+cell labels, target validation, or drug evidence.
 
 ## 8. Monitor the run
 
