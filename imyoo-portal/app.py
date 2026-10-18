@@ -51,8 +51,23 @@ DETAIL_PALETTE = ["#9b8ce0", "#3fb8a6", "#8cc63f", "#f2c14e", "#e07bb5", "#c9a27
 
 st.set_page_config(page_title="ImYoo Flare Explorer", page_icon="🩸", layout="wide")
 
+# Shared mode (share_live.sh): a password screen for visitors, and no Claude calls on our AWS budget.
+SHARED = os.environ.get("PORTAL_SHARED") == "1"
+_password = os.environ.get("PORTAL_PASSWORD", "")
+if _password and not st.session_state.get("authed"):
+    import hmac
+    st.title("🩸 ImYoo Flare Explorer")
+    st.caption("Shared with SPC Bio-Data Hackathon judges and invited guests. Please don't forward the link.")
+    typed = st.text_input("Password", type="password")
+    if typed and hmac.compare_digest(typed, _password):
+        st.session_state["authed"] = True
+        st.rerun()
+    elif typed:
+        st.error("Wrong password.")
+    st.stop()
+
 PAGES = {"Home": "🏠", "The study": "🗓️", "A person's journey": "👤", "Flare signature": "📊",
-         "Seeing a flare coming": "🔮", "Ask the Flare Analyst": "💬", "My immune report": "📋",
+         "Seeing a flare coming": "🔮", **({} if SHARED else {"Ask the Flare Analyst": "💬"}), "My immune report": "📋",
          "Sid's journey": "🦴", "Sid cluster bridge": "🔗", "Compare conditions": "🔀",
          "Unsupervised clusters": "🧩", "Cluster studies": "🧪", "Cell map": "🗺️", "Genes": "🧬", "How we checked": "✅"}
 
@@ -827,6 +842,7 @@ if page == "Home":
     st.subheader("Take the tour")
     tour = [("📊 The finding", "Flare signature"), ("📋 A patient's report", "My immune report"),
             ("💬 Ask the AI analyst", "Ask the Flare Analyst"), ("✅ Is it real?", "How we checked")]
+    tour = [t for t in tour if t[1] in PAGES]
     for col, (label, target) in zip(st.columns(len(tour)), tour):
         col.button(label, on_click=goto, args=(target,), width="stretch", type="primary" if target == "Flare signature" else "secondary")
 
@@ -1328,7 +1344,7 @@ elif page == "My immune report":
     n_hit = int((all_fl["B Cells"] > b_max).sum()) if "B Cells" in all_fl else 0
     facts.append(f"In this study, B-cell jumps above every feeling-fine sample (more than {b_max:+.0f} points) were "
                  f"seen in {n_hit} of {int(all_fl['B Cells'].notna().sum())} flare samples.")
-    if st.button("💬 Explain my report in plain words"):
+    if not SHARED and st.button("💬 Explain my report in plain words"):
         import analyst
         try:
             with st.spinner("Claude is writing a plain-language summary…"):
