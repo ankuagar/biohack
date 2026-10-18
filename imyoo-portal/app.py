@@ -5,6 +5,7 @@ Reads the small tables made by precompute.py (or make_demo_data.py) from ./data.
 """
 import json
 import os
+from html import escape
 
 import numpy as np
 import pandas as pd
@@ -75,6 +76,18 @@ CSS = """
 .finding.quiet .tag {color: inherit; opacity: .7;}
 .finding .big {font-size: 1.4rem; font-weight: 700; margin: .2rem 0; line-height: 1.3;}
 .finding .small {opacity: .75; font-size: .9rem;}
+.signal-card {border: 1px solid rgba(91,63,209,.35); border-left: 7px solid #5b3fd1; border-radius: 18px;
+              padding: 1.15rem 1.35rem; margin: .45rem 0 1rem;
+              background: linear-gradient(135deg, rgba(91,63,209,.12), rgba(63,184,166,.08));}
+.signal-kicker {color: #5b3fd1; font-size: .74rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;}
+.signal-title {font-size: 1.25rem; font-weight: 800; margin: .25rem 0 .85rem;}
+.signal-grid {display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; margin-bottom: .85rem;}
+.signal-stat {border-radius: 12px; padding: .65rem .8rem; background: rgba(255,255,255,.28); border: 1px solid rgba(91,63,209,.16);}
+.signal-stat span {display: block; font-size: .78rem; opacity: .78;}
+.signal-stat strong {display: block; color: #5b3fd1; font-size: 1.35rem; margin-top: .15rem;}
+.signal-detail {font-size: .9rem; line-height: 1.5;}
+.signal-next {border-top: 1px solid rgba(91,63,209,.22); margin-top: .8rem; padding-top: .75rem; font-size: .92rem; line-height: 1.5;}
+.signal-caveat {color: #b8336a; font-size: .82rem; margin-top: .65rem; line-height: 1.45;}
 .why-row {display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .9rem; margin: .4rem 0 1rem;}
 .why {border: 1px solid rgba(128,128,128,.25); border-radius: 16px; padding: 1rem 1.2rem;}
 .why b {display: block; font-size: 1.02rem; margin: .3rem 0 .2rem;}
@@ -1681,6 +1694,31 @@ elif page == "Sid cluster bridge":
                     st.download_button("Download convergent shortlist (CSV)", shortlist.to_csv(index=False).encode("utf-8"),
                                        file_name=f"sid_convergent_programs_{selected_type.replace(' ', '_')}.csv",
                                        mime="text/csv", key="sid_convergent_download")
+                    top = shortlist.iloc[0]
+                    top_cluster = str(top["cluster"])
+                    top_effect = effects[effects["cluster"] == top_cluster].iloc[0]
+                    top_genes = ", ".join(matched_genes_by_cluster.get(top_cluster, [])[:8]) or "no matched genes listed"
+                    ci_text = (f"[{top_effect['95% CI low']:+.2f}, {top_effect['95% CI high']:+.2f}]"
+                               if pd.notna(top_effect["95% CI low"]) and pd.notna(top_effect["95% CI high"])
+                               else "not estimable with the available draws")
+                    sid_value = f"{top['Sid change']:+.2f}"
+                    ibd_value = f"{top['ImYoo flare change']:+.2f}" if pd.notna(top["ImYoo flare change"]) else "n/a"
+                    p_value = f"{top['null p']:.3f}" if pd.notna(top["null p"]) else "n/a"
+                    st.subheader("From signal to next experiment")
+                    st.markdown(f"""
+                    <div class="signal-card">
+                      <div class="signal-kicker">Cross-dataset hypothesis</div>
+                      <div class="signal-title">{escape(str(top['program']))}</div>
+                      <div class="signal-grid">
+                        <div class="signal-stat"><span>Sid after − before</span><strong>{escape(sid_value)}</strong></div>
+                        <div class="signal-stat"><span>ImYoo flare − baseline</span><strong>{escape(ibd_value)}</strong></div>
+                        <div class="signal-stat"><span>Random-set p</span><strong>{escape(p_value)}</strong></div>
+                      </div>
+                      <div class="signal-detail"><b>Shared genes:</b> {escape(top_genes)}<br><b>Sid 95% interval:</b> {escape(ci_text)}<br><b>Evidence signals:</b> {escape(str(top['support']))}</div>
+                      <div class="signal-next"><b>Next experiment:</b> validate this marker program in an independent cohort and confirm that the leading protein is present in the relevant tumor or blood compartment before considering any binder design.</div>
+                      <div class="signal-caveat">This is a cross-dataset biological hypothesis. It is not target validation, a treatment effect, or evidence that a binder would be a drug.</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 st.subheader(f"Program changes after {split:%Y-%m-%d}")
                 st.caption("This ranks the change in each cluster program's mean score after the selected date. It is descriptive and does not establish that the date caused the change.")
                 fig = px.bar(effects, x="change", y="program", orientation="h", color="change",
