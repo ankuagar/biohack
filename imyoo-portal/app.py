@@ -1815,6 +1815,53 @@ elif page == "Sid cluster bridge":
                     else:
                         st.info("The selected ImYoo cell type has fewer than three cluster programs with matched marker genes, so a correlation is not shown.")
 
+                driver_genes = matched_genes_by_cluster.get(str(selected_cluster), [])
+                driver_sid = load_sid()
+                driver_pb = driver_sid.get("pseudobulk") if driver_sid is not None else None
+                if driver_genes and not ibd_changes.empty and driver_pb is not None:
+                    sid_one = driver_pb[driver_pb["cell_type"].astype(str) == selected_type].copy()
+                    sid_gene_columns = [column for column in sid_one.columns if column not in {"date", "cell_type", "n_cells"}]
+                    sid_before = sid_one.loc[sid_one["date"] < split, sid_gene_columns]
+                    sid_after = sid_one.loc[sid_one["date"] >= split, sid_gene_columns]
+                    if not sid_before.empty and not sid_after.empty:
+                        sid_numeric = sid_one[sid_gene_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+                        sid_mean = sid_numeric.mean(axis=0)
+                        sid_std = sid_numeric.std(axis=0, ddof=0).replace(0, 1.0).fillna(1.0)
+                        sid_z = (sid_numeric - sid_mean) / sid_std
+                        sid_z_before = sid_z.loc[sid_one["date"] < split]
+                        sid_z_after = sid_z.loc[sid_one["date"] >= split]
+                        sid_change_lookup = {str(g).split(".", 1)[0].upper(): float(value)
+                                             for g, value in (sid_z_after.mean(axis=0) - sid_z_before.mean(axis=0)).items()}
+                        ibd_lookup = {str(g).split(".", 1)[0].upper(): float(value)
+                                      for g, value in ibd_changes["change"].items() if pd.notna(value)}
+                        driver_rows = []
+                        for gene in driver_genes:
+                            key = gene.upper()
+                            ibd_value = ibd_lookup.get(key, np.nan)
+                            sid_value = sid_change_lookup.get(key, np.nan)
+                            if pd.notna(ibd_value) and pd.notna(sid_value):
+                                direction = "Agree" if np.sign(ibd_value) == np.sign(sid_value) and ibd_value != 0 else "Opposite"
+                            elif pd.notna(ibd_value):
+                                direction = "ImYoo only"
+                            elif pd.notna(sid_value):
+                                direction = "Sid only"
+                            else:
+                                direction = "Not measured"
+                            driver_rows.append({
+                                "gene": gene,
+                                "ImYoo flare change (log2)": ibd_value,
+                                "Sid standardized change": sid_value,
+                                "direction": direction,
+                            })
+                        drivers = pd.DataFrame(driver_rows)
+                        if not drivers.empty:
+                            st.subheader(f"Driver genes · Cluster {selected_cluster}")
+                            st.caption("Each gene's Sid value is its contribution to the standardized program change. Agreement means the gene moves in the same direction in ImYoo flares and Sid's selected before/after split.")
+                            st.dataframe(drivers.round(2), hide_index=True, width="stretch")
+                            st.download_button("Download driver genes (CSV)", drivers.to_csv(index=False).encode("utf-8"),
+                                               file_name=f"sid_cluster_{selected_cluster}_drivers.csv",
+                                               mime="text/csv", key="sid_driver_genes_download")
+
 elif page == "Compare conditions":
     header("IBD vs cancer: do their immune changes look alike?",
            "We compare **how genes change** rather than raw gene levels. A change is measured within the same person "
