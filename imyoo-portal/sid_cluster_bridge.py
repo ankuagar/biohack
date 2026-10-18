@@ -11,6 +11,7 @@ Run in SageMaker after sid_pseudobulk.py and the ImYoo clustering outputs:
 
 Outputs are compact and written to data/:
     sid_cluster_scores.parquet
+    sid_cluster_null_scores.parquet
     sid_cluster_bridge_summary.parquet
     sid_cluster_bridge_info.json
 """
@@ -37,6 +38,8 @@ def main():
         help="ImYoo H5AD used to translate numeric cluster marker IDs to gene symbols")
     ap.add_argument("--out", default="data")
     ap.add_argument("--top-markers", type=int, default=10)
+    ap.add_argument("--null-sets", type=int, default=100,
+                    help="Matched-size random gene sets per cluster for null controls")
     args = ap.parse_args()
 
     markers = pd.read_parquet(args.markers)
@@ -102,7 +105,9 @@ def main():
         marker_text[str(cluster)] = ", ".join(genes)
 
     scores = []
+    null_scores = []
     summary = []
+    rng = np.random.default_rng(0)
     sid_values = sid[gene_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0)
     # Standardize each gene within each Sid cell group across draws so a score
     # compares a group's relative program over time, rather than cell-group
@@ -131,6 +136,18 @@ def main():
         rows["n_genes_used"] = len(columns)
         scores.append(rows)
 
+        # Matched-size random gene programs provide a descriptive null. Keep
+        # the same Sid rows and standardization, changing only the gene set.
+        pool = [column for column in gene_columns if column not in columns]
+        n_controls = min(args.null_sets, 0 if not pool else len(pool))
+        for null_index in range(n_controls):
+            control_columns = rng.choice(pool, size=len(columns), replace=False).tolist()
+            null_rows = sid[["date", "cell_type", "n_cells"]].copy()
+            null_rows["cluster"] = cluster
+            null_rows["null_index"] = null_index
+            null_rows["score"] = sid_z[control_columns].mean(axis=1).to_numpy(dtype="float32")
+            null_scores.append(null_rows)
+
     if not scores:
         raise SystemExit(
             "No ImYoo cluster marker genes matched Sid pseudobulk columns. "
@@ -143,6 +160,9 @@ def main():
     summary["sid_rows"] = summary["cluster"].map(result.groupby("cluster").size()).fillna(0).astype(int)
     os.makedirs(args.out, exist_ok=True)
     result.to_parquet(os.path.join(args.out, "sid_cluster_scores.parquet"), index=False)
+    if null_scores:
+        pd.concat(null_scores, ignore_index=True).to_parquet(
+            os.path.join(args.out, "sid_cluster_null_scores.parquet"), index=False)
     summary.to_parquet(os.path.join(args.out, "sid_cluster_bridge_summary.parquet"), index=False)
     info = {
         "clusters": summary["cluster"].tolist(),
@@ -150,6 +170,7 @@ def main():
         "sid_rows": int(len(sid)),
         "sid_gene_columns": len(gene_columns),
         "clusters_with_matches": int((summary["n_genes_used"] > 0).sum()),
+        "null_sets_per_cluster": args.null_sets,
         "marker_gene_mapping": mapping_source,
         "interpretation": "Scores standardized within each Sid cell group across draws for ImYoo marker programs; not transferred cell labels.",
     }

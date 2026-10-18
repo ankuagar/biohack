@@ -126,7 +126,7 @@ It also needs the ImYoo file in `~/data/` (it learns cell types from it) and tak
 (`features.tsv.gz`) lets it match gene names between the two files. Output goes to `data/sid/`; the portal picks it up.
 
 The bridge reads the compact `data/cluster_markers.parquet` and `data/sid/pseudobulk.parquet` tables. It writes
-`data/sid_cluster_scores.parquet`, `data/sid_cluster_bridge_summary.parquet`, and
+`data/sid_cluster_scores.parquet`, `data/sid_cluster_null_scores.parquet`, `data/sid_cluster_bridge_summary.parquet`, and
 `data/sid_cluster_bridge_info.json`; these are ignored data artifacts and should stay on the SageMaker machine.
 Refresh the portal and open **🔗 Sid cluster bridge**. A score is standardized within each Sid cell group across
 draws, using the shared marker genes of one ImYoo cluster. It is exploratory evidence for a related biological program, not a claim

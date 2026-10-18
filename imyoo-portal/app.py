@@ -190,7 +190,8 @@ def load():
         f"{DATA}/{name}" for name in
         ["cluster_cells.parquet", "cluster_summary.parquet", "cluster_markers.parquet", "cluster_info.json",
          "cluster_study_cells.parquet", "cluster_study_summary.parquet", "cluster_study_stability.parquet",
-         "cluster_study_info.json", "sid_cluster_scores.parquet", "sid_cluster_bridge_summary.parquet",
+         "cluster_study_info.json", "sid_cluster_scores.parquet", "sid_cluster_null_scores.parquet",
+         "sid_cluster_bridge_summary.parquet",
          "sid_cluster_bridge_info.json"]
         if os.path.exists(f"{DATA}/{name}")
     ]
@@ -216,7 +217,7 @@ def _load(built_at):
         d[name] = pd.read_parquet(f) if os.path.exists(f) else None
     study_info = f"{DATA}/cluster_study_info.json"
     d["cluster_study_info"] = json.load(open(study_info)) if os.path.exists(study_info) else None
-    for name in ["sid_cluster_scores", "sid_cluster_bridge_summary"]:
+    for name in ["sid_cluster_scores", "sid_cluster_null_scores", "sid_cluster_bridge_summary"]:
         f = f"{DATA}/{name}.parquet"
         d[name] = pd.read_parquet(f) if os.path.exists(f) else None
     bridge_info = f"{DATA}/sid_cluster_bridge_info.json"
@@ -1475,14 +1476,19 @@ elif page == "Sid's journey":
 
 elif page == "Sid cluster bridge":
     header("ImYoo cluster programs in Sid's blood", "Score Sid's blood-draw summaries for the gene programs that mark each ImYoo cluster.")
+    st.info("**Evidence tier: cross-dataset program match.** These scores are exploratory associations between shared gene programs in two datasets; they are not transferred cell labels, treatment effects, or drug validation.")
     scores = D.get("sid_cluster_scores")
+    null_scores = D.get("sid_cluster_null_scores")
     bridge_summary = D.get("sid_cluster_bridge_summary")
     bridge_info = D.get("sid_cluster_bridge_info") or {}
     if scores is None or bridge_summary is None:
-        st.info("The Sid cluster bridge has not been built yet. In SageMaker run `python sid_cluster_bridge.py` after `sid_pseudobulk.py` and copy the three bridge outputs into data/.")
+        st.info("The Sid cluster bridge has not been built yet. In SageMaker run `python sid_cluster_bridge.py` after `sid_pseudobulk.py`; it writes the bridge outputs into data/.")
     else:
         scores = scores.copy()
         scores["date"] = pd.to_datetime(scores["date"], errors="coerce")
+        if null_scores is not None:
+            null_scores = null_scores.copy()
+            null_scores["date"] = pd.to_datetime(null_scores["date"], errors="coerce")
         cell_types = sorted(scores["cell_type"].dropna().astype(str).unique())
         default_type = "T Cells" if "T Cells" in cell_types else cell_types[0]
         selected_type = st.selectbox("Sid cell group", cell_types, index=cell_types.index(default_type),
@@ -1493,8 +1499,10 @@ elif page == "Sid cluster bridge":
         if cluster_summary is not None and "cluster" in cluster_summary:
             summary_by_cluster = {str(row["cluster"]): row for _, row in cluster_summary.iterrows()}
         marker_by_cluster = {}
+        matched_genes_by_cluster = {}
         for _, row in bridge_summary.iterrows():
             marker_by_cluster[str(row["cluster"])] = [g.strip() for g in str(row.get("marker_genes", "")).split(",") if g.strip()]
+            matched_genes_by_cluster[str(row["cluster"])] = [g.strip() for g in str(row.get("genes_used", "")).split(",") if g.strip()]
 
         def cluster_program_label(cluster):
             row = summary_by_cluster.get(str(cluster), {})
@@ -1519,12 +1527,16 @@ elif page == "Sid cluster bridge":
             fig = px.line(view, x="date", y="score", markers=True,
                           hover_data={"date": True, "score": ":.2f", "n_cells": True, "genes_used": True},
                           labels={"date": "Sid blood draw", "score": "Standardized ImYoo marker-program score"},
-                          title=f"{selected_label} program in Sid's {selected_type}")
+                          title=f"Cluster {selected_cluster} program · Sid {selected_type}")
             sd = load_sid()
             if sd is not None and not sd["events"].empty:
                 mark_events(fig, sd["events"], view["date"].min(), view["date"].max())
             fig.update_layout(height=420, showlegend=False)
             chart(fig)
+            st.download_button("Download selected program scores (CSV)", view.to_csv(index=False).encode("utf-8"),
+                               file_name=f"sid_cluster_{selected_cluster}_{selected_type.replace(' ', '_')}.csv",
+                               mime="text/csv", key="sid_bridge_scores_download")
+            st.caption(f"Selected program: {selected_label}")
             st.caption("Scores are standardized within each Sid cell group across draws. A higher score means stronger relative activity of the ImYoo cluster's shared marker genes in that Sid group. This is a gene-program comparison, not a transferred cell label.")
             split = st.date_input("Optional before/after date", value=view["date"].median().date(), key="sid_bridge_split")
             split = pd.Timestamp(split)
@@ -1540,7 +1552,7 @@ elif page == "Sid cluster bridge":
                 st.write(one[["marker_genes", "genes_used", "n_marker_genes", "n_genes_used"]].iloc[0].to_dict())
         st.caption(f"Bridge used {bridge_info.get('clusters_with_matches', 'unknown')} ImYoo clusters with at least one matched gene. Sid's data are from one person and a different lab kit.")
 
-        st.subheader(f"All ImYoo cluster programs in Sid's {selected_type}")
+        st.subheader(f"All cluster programs · Sid {selected_type}")
         all_scores = scores[scores["cell_type"].astype(str) == selected_type].copy()
         all_scores = all_scores.dropna(subset=["date", "score"])
         heat = all_scores.pivot_table(index="cluster", columns="date", values="score", aggfunc="mean")
@@ -1551,7 +1563,7 @@ elif page == "Sid cluster bridge":
             fig = px.imshow(heat, aspect="auto", color_continuous_scale="RdBu_r", zmin=-2, zmax=2,
                             labels={"x": "Sid blood-draw date", "y": "ImYoo cluster",
                                     "color": "Standardized\nprogram score"},
-                            title=f"Marker-program activity across ImYoo clusters in Sid's {selected_type}")
+                            title=f"All cluster programs · Sid {selected_type}")
             fig.update_xaxes(tickformat="%b %Y", tickangle=-35)
             fig.update_layout(height=max(420, min(760, 260 + 28 * len(heat))),
                               margin=dict(t=78, b=90))
@@ -1560,14 +1572,28 @@ elif page == "Sid cluster bridge":
 
         if not view.empty:
             effects = []
+            bootstrap_rng = np.random.default_rng(0)
+
+            def bootstrap_interval(before_values, after_values, draws=2000):
+                if len(before_values) < 2 or len(after_values) < 2:
+                    return np.nan, np.nan
+                before_array = np.asarray(before_values, dtype=float)
+                after_array = np.asarray(after_values, dtype=float)
+                before_resampled = bootstrap_rng.choice(before_array, (draws, len(before_array)), replace=True).mean(axis=1)
+                after_resampled = bootstrap_rng.choice(after_array, (draws, len(after_array)), replace=True).mean(axis=1)
+                return np.percentile(after_resampled - before_resampled, [2.5, 97.5])
+
             for cluster, group in all_scores.groupby(all_scores["cluster"].astype(str), sort=False):
                 before_group = group.loc[group["date"] < split, "score"]
                 after_group = group.loc[group["date"] >= split, "score"]
+                ci_low, ci_high = bootstrap_interval(before_group, after_group)
                 effects.append({
                     "cluster": str(cluster),
                     "before": before_group.mean(),
                     "after": after_group.mean(),
                     "change": after_group.mean() - before_group.mean() if len(before_group) and len(after_group) else np.nan,
+                    "95% CI low": ci_low,
+                    "95% CI high": ci_high,
                     "draws before": int(len(before_group)),
                     "draws after": int(len(after_group)),
                 })
@@ -1580,12 +1606,85 @@ elif page == "Sid cluster bridge":
                 fig = px.bar(effects, x="change", y="program", orientation="h", color="change",
                              color_continuous_scale="RdBu_r", range_color=[-2, 2],
                              labels={"change": "After minus before standardized score", "program": "ImYoo cluster program"},
-                             title="Which ImYoo programs changed most across the selected split?")
+                             title="Cluster program changes across split")
                 fig.update_layout(height=max(360, min(680, 220 + 26 * len(effects))),
                                   coloraxis_colorbar=dict(title="Change"))
                 chart(fig)
-                st.dataframe(effects[["program", "before", "after", "change", "draws before", "draws after"]]
+                st.dataframe(effects[["program", "before", "after", "change", "95% CI low", "95% CI high", "draws before", "draws after"]]
                              .sort_values("change", ascending=False).round(2), hide_index=True, width="stretch")
+                st.download_button("Download program effect table (CSV)", effects.to_csv(index=False).encode("utf-8"),
+                                   file_name=f"sid_cluster_effects_{selected_type.replace(' ', '_')}.csv",
+                                   mime="text/csv", key="sid_bridge_effects_download")
+
+                if null_scores is not None:
+                    selected_null = null_scores[(null_scores["cell_type"].astype(str) == selected_type) &
+                                                (null_scores["cluster"].astype(str) == selected_cluster)]
+                    null_changes = []
+                    for _, group in selected_null.groupby("null_index", sort=False):
+                        null_before = group.loc[group["date"] < split, "score"]
+                        null_after = group.loc[group["date"] >= split, "score"]
+                        if len(null_before) and len(null_after):
+                            null_changes.append(float(null_after.mean() - null_before.mean()))
+                    selected_real = effects.loc[effects["cluster"] == selected_cluster, "change"]
+                    if null_changes and not selected_real.empty:
+                        real_change = float(selected_real.iloc[0])
+                        empirical_p = (1 + sum(abs(change) >= abs(real_change) for change in null_changes)) / (1 + len(null_changes))
+                        st.subheader("Random-gene-set check for the selected program")
+                        st.caption("The null distribution uses random gene sets with the same number of measured genes as this cluster program. It tests how unusual the observed before/after change is within Sid's data; it is not a clinical p-value.")
+                        kpis([("🎯", f"{real_change:+.2f}", "observed change"),
+                              ("🎲", f"{empirical_p:.3f}", "two-sided empirical p"),
+                              ("🧪", len(null_changes), "random gene sets")])
+                        null_frame = pd.DataFrame({"change": null_changes})
+                        fig = px.histogram(null_frame, x="change", nbins=20,
+                                           labels={"change": "Random-set after minus before score", "count": "Number of random sets"},
+                                           title=f"Observed vs random-set change · Cluster {selected_cluster}")
+                        fig.add_vline(x=real_change, line_color=FLARE, line_width=3,
+                                      annotation_text="Observed", annotation_position="top")
+                        fig.update_layout(height=360, showlegend=False)
+                        chart(fig)
+
+                ibd_types = sorted(D["pseudobulk"]["cell_type"].dropna().astype(str).unique())
+                preferred_ibd = next((name for name in ["CD8 T Cells", "T Cells"] if name in ibd_types), ibd_types[0])
+                ibd_type = st.selectbox("ImYoo cell type for flare comparison", ibd_types,
+                                        index=ibd_types.index(preferred_ibd), key="sid_bridge_ibd_type",
+                                        help="This compares the average change of each ImYoo cluster's matched marker genes during an IBD flare.")
+                ibd_changes = flare_gene_changes(ibd_type)
+                if not ibd_changes.empty:
+                    ibd_lookup = {str(g).split(".", 1)[0].upper(): float(value)
+                                  for g, value in ibd_changes["change"].items() if pd.notna(value)}
+                    correlation_rows = []
+                    for _, row in effects.iterrows():
+                        genes = matched_genes_by_cluster.get(str(row["cluster"]), [])
+                        values = [ibd_lookup[g.upper()] for g in genes if g.upper() in ibd_lookup]
+                        if values:
+                            correlation_rows.append({
+                                "cluster": str(row["cluster"]),
+                                "program": row["program"],
+                                "ImYoo flare change": float(np.mean(values)),
+                                "Sid before/after change": float(row["change"]),
+                                "shared genes": len(values),
+                            })
+                    correlation = pd.DataFrame(correlation_rows)
+                    if len(correlation) >= 3:
+                        from scipy.stats import spearmanr
+                        rho = spearmanr(correlation["ImYoo flare change"], correlation["Sid before/after change"]).correlation
+                        st.subheader("ImYoo flare change compared with Sid's change")
+                        st.caption("Each point is a cluster marker program. This compares the direction of its average marker-gene change during an ImYoo flare with its Sid before/after score change; it is a cross-dataset association, not causal evidence.")
+                        st.metric("Spearman correlation across programs", f"{rho:+.2f}",
+                                  help="Computed across cluster programs with at least one shared marker gene.")
+                        fig = px.scatter(correlation, x="ImYoo flare change", y="Sid before/after change",
+                                         hover_name="program", hover_data={"shared genes": True},
+                                         labels={"ImYoo flare change": f"ImYoo {ibd_type}: flare minus baseline",
+                                                 "Sid before/after change": "Sid: after minus before score"},
+                                         title="Do the same cluster programs move in both datasets?")
+                        fig.add_hline(y=0, line_color=GREY, line_width=1)
+                        fig.add_vline(x=0, line_color=GREY, line_width=1)
+                        fig.update_layout(height=430, showlegend=False)
+                        chart(fig)
+                        st.dataframe(correlation.sort_values("Sid before/after change", ascending=False),
+                                     hide_index=True, width="stretch")
+                    else:
+                        st.info("The selected ImYoo cell type has fewer than three cluster programs with matched marker genes, so a correlation is not shown.")
 
 elif page == "Compare conditions":
     header("IBD vs cancer: do their immune changes look alike?",

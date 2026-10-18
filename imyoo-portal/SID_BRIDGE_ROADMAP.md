@@ -9,13 +9,13 @@ establish treatment effects.
 | # | Goal | Status | Current evidence / next step |
 |---|---|---|---|
 | 1 | All-cluster heatmap across every ImYoo cluster and Sid cell group | 🟡 Partial | The portal has an all-cluster heatmap for the selected Sid cell group. Add a cluster × Sid-cell-group overview. |
-| 2 | Before/after effect sizes for each cluster program | 🟡 Partial | The portal shows before, after, difference, and draw counts. Add bootstrap confidence intervals and minimum-draw warnings. |
-| 3 | Null comparison with random gene sets of the same size | ⬜ Pending | Generate reproducible matched-size controls and show the real-program percentile or empirical p-value. |
-| 4 | Connect cluster programs directly to the IBD analysis | ⬜ Pending | Compare ImYoo flare-minus-baseline changes with Sid before/after changes and report a gene-program correlation. |
+| 2 | Before/after effect sizes for each cluster program | ✅ Implemented | The portal shows before, after, difference, draw counts, and a deterministic 95% bootstrap interval when both sides have at least two draws. |
+| 3 | Null comparison with random gene sets of the same size | 🟡 Implemented in code | Rerun `sid_cluster_bridge.py` to create matched random-set scores; the portal then shows an empirical two-sided comparison. |
+| 4 | Connect cluster programs directly to the IBD analysis | 🟡 Implemented in code | The portal compares ImYoo flare-minus-baseline marker changes with Sid before/after changes when at least three programs match. |
 | 5 | Improve cluster interpretation | 🟡 Partial | Labels now include dominant existing annotation and representative markers. Add flare enrichment and the Sid group with the strongest match. |
 | 6 | Parameter-study robustness | ⬜ Pending | Repeat program scoring across the five clustering resolutions and identify stable programs. |
-| 7 | Evidence tiers | ⬜ Pending | Distinguish observed association, cross-dataset program match, biological hypothesis, and computer-designed binder candidate. |
-| 8 | Exportable reports | ⬜ Pending | Add CSV and compact HTML/PDF export for a selected cluster–Sid comparison. |
+| 7 | Evidence tiers | 🟡 Started | The bridge page now labels itself as a cross-dataset program match and separates it from drug validation. Add tiers across the full portal. |
+| 8 | Exportable reports | 🟡 Partial | CSV downloads now cover selected scores and effect tables. Add compact HTML/PDF export. |
 
 ## Recommended order
 

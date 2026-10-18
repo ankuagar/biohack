@@ -511,9 +511,10 @@ python sid_cluster_bridge.py
 ls -lh data/sid_cluster_*
 ~~~
 
-The script writes three compact files into `data/`:
+The script writes four compact files into `data/`:
 
 - `sid_cluster_scores.parquet`: one score per Sid draw, Sid cell group, and ImYoo cluster.
+- `sid_cluster_null_scores.parquet`: reproducible matched-size random gene-set scores for the null comparison.
 - `sid_cluster_bridge_summary.parquet`: marker genes used and how many matched Sid's gene table.
 - `sid_cluster_bridge_info.json`: provenance and interpretation metadata.
 
