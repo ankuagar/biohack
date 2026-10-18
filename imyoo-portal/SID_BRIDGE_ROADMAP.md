@@ -14,7 +14,7 @@ establish treatment effects.
 | 4 | Connect cluster programs directly to the IBD analysis | 🟡 Implemented in code | The portal compares ImYoo flare-minus-baseline marker changes with Sid before/after changes when at least three programs match. |
 | 5 | Improve cluster interpretation | 🟡 Partial | Labels now include dominant existing annotation and representative markers. Add flare enrichment and the Sid group with the strongest match. |
 | 6 | Parameter-study robustness | ⬜ Pending | Repeat program scoring across the five clustering resolutions and identify stable programs. |
-| 7 | Evidence tiers | 🟡 Started | The bridge page now labels itself as a cross-dataset program match and separates it from drug validation. Add tiers across the full portal. |
+| 7 | Evidence tiers | 🟡 Started | The bridge page now labels itself as a cross-dataset program match and adds a convergent-program shortlist; extend the tiers across the full portal. |
 | 8 | Exportable reports | 🟡 Partial | CSV downloads now cover selected scores and effect tables. Add compact HTML/PDF export. |
 
 ## Recommended order

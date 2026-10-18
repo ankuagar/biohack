@@ -1608,6 +1608,79 @@ elif page == "Sid cluster bridge":
             if not effects.empty:
                 effects = effects.sort_values("change")
                 effects["program"] = effects["cluster"].map(cluster_program_label)
+                null_p_by_cluster = {}
+                if null_scores is not None:
+                    selected_null_all = null_scores[null_scores["cell_type"].astype(str) == selected_type]
+                    for cluster, group in selected_null_all.groupby(selected_null_all["cluster"].astype(str), sort=False):
+                        null_changes = []
+                        for _, null_group in group.groupby("null_index", sort=False):
+                            null_before = null_group.loc[null_group["date"] < split, "score"]
+                            null_after = null_group.loc[null_group["date"] >= split, "score"]
+                            if len(null_before) and len(null_after):
+                                null_changes.append(float(null_after.mean() - null_before.mean()))
+                        real = effects.loc[effects["cluster"] == str(cluster), "change"]
+                        if null_changes and not real.empty:
+                            observed = float(real.iloc[0])
+                            null_p_by_cluster[str(cluster)] = (1 + sum(abs(value) >= abs(observed) for value in null_changes)) / (1 + len(null_changes))
+
+                default_ibd_type = next((name for name in ["CD8 T Cells", "T Cells"]
+                                         if name in D["pseudobulk"]["cell_type"].astype(str).unique()), None)
+                ibd_lookup = {}
+                if default_ibd_type:
+                    default_ibd_changes = flare_gene_changes(default_ibd_type)
+                    if not default_ibd_changes.empty:
+                        ibd_lookup = {str(g).split(".", 1)[0].upper(): float(value)
+                                      for g, value in default_ibd_changes["change"].items() if pd.notna(value)}
+
+                matched_counts = {str(row["cluster"]): int(row.get("n_genes_used", 0))
+                                  for _, row in bridge_summary.iterrows()}
+                shortlist_rows = []
+                for _, row in effects.iterrows():
+                    cluster = str(row["cluster"])
+                    genes = matched_genes_by_cluster.get(cluster, [])
+                    ibd_values = [ibd_lookup[g.upper()] for g in genes if g.upper() in ibd_lookup]
+                    ibd_change = float(np.mean(ibd_values)) if ibd_values else np.nan
+                    ci_support = bool(pd.notna(row["95% CI low"]) and pd.notna(row["95% CI high"])
+                                      and (row["95% CI low"] > 0 or row["95% CI high"] < 0))
+                    same_direction = bool(pd.notna(ibd_change) and row["change"] != 0
+                                          and np.sign(ibd_change) == np.sign(row["change"]))
+                    signals = []
+                    if same_direction:
+                        signals.append(f"same direction in {default_ibd_type}")
+                    if ci_support:
+                        signals.append("95% CI excludes 0")
+                    if null_p_by_cluster.get(cluster, 1) <= 0.05:
+                        signals.append("null p ≤ 0.05")
+                    shortlist_rows.append({
+                        "cluster": cluster,
+                        "program": row["program"],
+                        "Sid change": row["change"],
+                        "ImYoo flare change": ibd_change,
+                        "null p": null_p_by_cluster.get(cluster, np.nan),
+                        "shared genes": matched_counts.get(cluster, 0),
+                        "support": "; ".join(signals) or "descriptive change only",
+                        "rank_same": int(same_direction),
+                        "rank_ci": int(ci_support),
+                        "rank_magnitude": abs(float(row["change"])),
+                    })
+                shortlist = pd.DataFrame(shortlist_rows)
+                if not shortlist.empty:
+                    shortlist = shortlist.sort_values(["rank_same", "rank_ci", "rank_magnitude"],
+                                                      ascending=[False, False, False]).head(5)
+                    st.subheader("Convergent program shortlist")
+                    st.caption("These are the most useful cross-dataset hypotheses from the current data. Ranking combines direction, uncertainty, null controls, and shared genes; it does not validate a target or a drug.")
+                    shortlist_display = shortlist[["program", "Sid change", "ImYoo flare change", "null p", "shared genes", "support"]].rename(columns={
+                        "program": "Cluster program",
+                        "Sid change": "Sid after − before",
+                        "ImYoo flare change": "ImYoo flare − baseline",
+                        "null p": "Random-set p",
+                        "shared genes": "Shared genes",
+                        "support": "Evidence signals",
+                    })
+                    st.dataframe(shortlist_display.round(2), hide_index=True, width="stretch")
+                    st.download_button("Download convergent shortlist (CSV)", shortlist.to_csv(index=False).encode("utf-8"),
+                                       file_name=f"sid_convergent_programs_{selected_type.replace(' ', '_')}.csv",
+                                       mime="text/csv", key="sid_convergent_download")
                 st.subheader(f"Program changes after {split:%Y-%m-%d}")
                 st.caption("This ranks the change in each cluster program's mean score after the selected date. It is descriptive and does not establish that the date caused the change.")
                 fig = px.bar(effects, x="change", y="program", orientation="h", color="change",
