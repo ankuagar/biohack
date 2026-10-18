@@ -26,7 +26,9 @@ Built for the [SPC Bio-Data Hackathon](https://www.southparkcommons.com/bio-data
    **Upload** button (arrow icon) for `precompute.py`, `app.py` and `analyst.py`. Dragging files in doesn't
    always overwrite old copies; Upload asks to overwrite. The theme file lives in a hidden folder, so create it
    from the terminal by copying `.streamlit/config.toml` into `~/imyoo-portal/.streamlit/`.
-3. **Install and build the summaries** (about 2 minutes on v3):
+3. **Install and build the summaries** (about 2 minutes on v3). If the file names genes only by code (ENSG…),
+   copy Sid's small 10x gene table to `~/data/sid/features.tsv.gz` first (see Sid's section) so genes get readable
+   names; the script prints which gene-name column it used:
    ```bash
    cd ~/imyoo-portal
    pip install -q pyarrow streamlit plotly statsmodels scikit-learn boto3

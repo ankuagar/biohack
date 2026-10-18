@@ -14,6 +14,8 @@ import streamlit as st
 from scipy.stats import wilcoxon
 from statsmodels.stats.multitest import multipletests
 
+from precompute import CD8_PANEL
+
 DATA = os.environ.get("IMYOO_PORTAL_DATA", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 FINE, FLARE = "#2b7bb9", "#e4572e"
 GREY = "#b0b7c3"
@@ -1356,10 +1358,12 @@ elif page == "Compare conditions":
         sp, events = SD["pseudobulk"], SD["events"]
         sid_types = sorted(sp["cell_type"].unique())
         c1, c2, c3 = st.columns(3)
-        sid_ct = c1.selectbox("Sid's cell family", sid_types,
-                              index=sid_types.index("T Cells") if "T Cells" in sid_types else 0)
+        pick = next((t for t in ["CD8 T Cells", "T Cells"] if t in sid_types), sid_types[0])
+        sid_ct = c1.selectbox("Sid's cells", sid_types, index=sid_types.index(pick))
         t_like = [c for c in pb_types if family_of(c) == family_of(sid_ct)] or pb_types
-        ibd_ct = c2.selectbox("Compare with IBD cell type", t_like, key="cmp_ibd_ct")
+        same = next((c for c in t_like if c.lower() == sid_ct.lower()),
+                    next((c for c in t_like if "cd8" in c.lower() and "cd8" in sid_ct.lower()), t_like[0]))
+        ibd_ct = c2.selectbox("Compare with IBD cell type", t_like, index=t_like.index(same), key="cmp_ibd_ct")
         start, end = sp["date"].min(), sp["date"].max()
         in_range = events[(events["date"] > start) & (events["date"] < end)]
         split_opts = {f"{r['label']} ({r['date']:%Y-%m-%d})": r["date"] for _, r in in_range.iterrows()}
@@ -1410,6 +1414,40 @@ elif page == "Compare conditions":
             top = sel.assign(order=(sel["x"].abs() + sel["y"].abs())).sort_values("order", ascending=False).head(15)
             col.markdown(f"**{title}** ({len(sel)} genes)")
             col.dataframe(top[["x", "y"]].rename(columns={"x": "IBD flare", "y": "Sid"}).round(2), width="stretch")
+
+        st.markdown(f"#### Inflammation genes in {ibd_ct} (IBD) and {sid_ct} (Sid): same or different?")
+        st.markdown("Genes chosen in advance for what they mean in CD8 'killer' T cells. Orange = more active, blue = "
+                    "less active (IBD: flare vs own calm samples; Sid: after vs before the chosen date).")
+        code_of = dict(zip(names["name"], names["code"])) if names is not None and "code" in names else {}
+        rows = []
+        for program, genes in CD8_PANEL.items():
+            for g in genes:
+                ib = next((ibd.loc[k, "change"] for k in (g, code_of.get(g)) if k in ibd.index), np.nan)
+                sd = next((sid_change.get(k) for k in (g, code_of.get(g)) if k in sid_change.index), np.nan)
+                rows.append({"program": program, "gene": g, "IBD flare": ib, "Sid": sd})
+        panel = pd.DataFrame(rows)
+        shown = panel.dropna(subset=["IBD flare", "Sid"], how="all")
+        if shown.empty:
+            st.info("None of the panel genes are in both summaries yet. Re-run precompute.py and sid_pseudobulk.py.")
+        else:
+            labels = shown["program"].str.split(" /").str[0] + " · " + shown["gene"]
+            z = shown[["IBD flare", "Sid"]].to_numpy()
+            fig = go.Figure(go.Heatmap(z=z, x=["IBD flare", "Sid"], y=labels, zmid=0, colorscale=[[0, FINE], [0.5, "#f7f7f7"], [1, FLARE]],
+                                       text=np.where(np.isnan(z), "not measured", np.round(z, 2).astype(str)),
+                                       texttemplate="%{text}", hovertemplate="%{y} · %{x}: %{z:.2f}<extra></extra>"))
+            fig.update_yaxes(autorange="reversed")
+            fig.update_layout(height=26 * len(shown) + 80, margin=dict(t=10, l=10))
+            chart(fig)
+            agree = shown.dropna()
+            same_dir = int((np.sign(agree["IBD flare"]) == np.sign(agree["Sid"])).sum())
+            st.markdown(f"Of {len(agree)} panel genes measured in both, **{same_dir} move the same way** and "
+                        f"**{len(agree) - same_dir} move in opposite directions**.")
+            by_prog = agree.assign(same=np.sign(agree["IBD flare"]) == np.sign(agree["Sid"])).groupby("program")["same"]
+            st.dataframe(pd.DataFrame({"genes": by_prog.size(), "same direction": by_prog.sum()}), width="content")
+        st.caption("Drug context (general knowledge, not from this data): approved cancer drugs block the checkpoint "
+                   "'brakes' PD-1, CTLA-4 and LAG-3 to release killer T cells; the IBD drug vedolizumab blocks α4β7 "
+                   "(ITGA4 + ITGB7) so immune cells can't enter the gut. Shared programs suggest shared drug effects "
+                   "(and side effects); different programs suggest more targeted options.")
 
     if SD is not None:
         sid_vs_ibd()
@@ -1512,8 +1550,12 @@ elif page == "Genes":
                      labels={"change": "Change during flare (log2, + = more active)",
                              "-log10 p": "Strength of evidence (higher = stronger)"}, render_mode="webgl")
     fig.update_traces(marker=dict(size=5))
+    for _, r in g.sort_values("p").head(12).iterrows():  # name the strongest genes right on the chart
+        fig.add_annotation(x=r["change"], y=r["-log10 p"], text=r["gene"], showarrow=False, yshift=9,
+                           font=dict(size=11))
     fig.update_layout(height=480, legend_title_text="")
     chart(fig)
+    st.caption("The 12 genes with the strongest evidence are named on the chart; hover any dot for its name.")
     top = g.sort_values("p").head(30)
     gene = st.selectbox("Look at one gene", top["gene"].tolist() + sorted(set(g["gene"]) - set(top["gene"])))
     pb = D["pseudobulk"]

@@ -44,7 +44,7 @@ def gene_name_options(adata, translate=None):
     """
     opts = {"row names": adata.var_names.astype(str)}
     for c in adata.var.columns:
-        if adata.var[c].dtype == object or str(adata.var[c].dtype) == "category":
+        if not pd.api.types.is_numeric_dtype(adata.var[c]):  # text columns, whatever pandas calls them
             opts[c] = adata.var[c].astype(str)
     if translate:
         rows = adata.var_names.astype(str)

@@ -25,6 +25,47 @@ LEVELS = {"broad": "cell_type_level_2", "detailed": "cell_type_level_3", "tcell"
 MIN_CELLS_PER_GROUP = 20  # pseudobulk groups smaller than this are too noisy
 N_MAP_CELLS = 60_000      # cells shown on the cell map
 N_GENES = 6_000           # genes kept for the gene explorer
+# CD8 T-cell inflammation genes, always kept so the IBD vs cancer comparison can show them (the portal groups them)
+CD8_PANEL = {
+    "Killing": ["GZMB", "GZMA", "GZMH", "GZMK", "PRF1", "GNLY", "NKG7"],
+    "Activation / interferon": ["IFNG", "CD69", "HLA-DRA", "CD38", "ISG15", "MX1", "IFI6", "STAT1"],
+    "Brakes / checkpoints": ["PDCD1", "LAG3", "HAVCR2", "TIGIT", "CTLA4", "TOX"],
+    "Gut homing": ["ITGA4", "ITGB7", "ITGAE", "CCR9"],
+    "Resting / memory": ["CCR7", "SELL", "TCF7", "IL7R"],
+}
+PANEL_GENES = [g for genes in CD8_PANEL.values() for g in genes]
+
+
+GENE_TABLE = os.environ.get("IMYOO_GENE_TABLE", os.path.expanduser("~/data/sid/features.tsv.gz"))  # 10x gene table: code <-> name (from Sid's lab output)
+KNOWN = ["CD3E", "CD8A", "MS4A1", "CD79A", "NKG7", "GNLY", "CD14", "LYZ", "GZMB", "IL7R", "CCR7", "FCGR3A"]
+
+
+def readable_gene_names(adata, say=print):
+    """Gene names people recognise (GZMB, CD8A...), whichever column of the file holds them.
+
+    v3 lists genes by row number, with names or codes in other columns. Tries every column and picks the one with the
+    most well-known gene names; if only codes (ENSG...) exist, translates them with the 10x gene table if available.
+    """
+    options = {"row names": adata.var_names.astype(str).to_numpy()}
+    for c in adata.var.columns:
+        if not pd.api.types.is_numeric_dtype(adata.var[c]):  # text columns, whatever pandas calls them
+            options[c] = adata.var[c].astype(str).to_numpy()
+    score = {k: int(np.isin(KNOWN, v).sum()) for k, v in options.items()}
+    best = max(score, key=score.get)
+    if score[best] >= 5:
+        say(f"gene names from '{best}' ({score[best]} of {len(KNOWN)} well-known genes found)")
+        return options[best]
+    coded = next((k for k, v in options.items() if np.mean([str(g).startswith("ENS") for g in v[:500]]) > 0.8), None)
+    if coded and os.path.exists(GENE_TABLE):
+        ft = pd.read_csv(GENE_TABLE, sep="\t", header=None).iloc[:, :2].astype(str)
+        name_of = dict(zip(ft[0], ft[1]))
+        codes = [str(g).split(".")[0] for g in options[coded]]
+        names = np.array([name_of.get(c, c) for c in codes])
+        say(f"gene names translated from codes in '{coded}' using the 10x gene table "
+            f"({int(np.isin(KNOWN, names).sum())} of {len(KNOWN)} well-known genes found)")
+        return names
+    say(f"WARNING: no readable gene names found (columns: {list(options)}); using '{coded or 'row names'}'")
+    return options[coded or "row names"]
 
 
 def text(col, missing="Unlabelled"):
@@ -186,11 +227,7 @@ def main():
     probe = X[:2000].data[:10000]
     if probe.size and not np.allclose(probe, np.round(probe)):
         say("WARNING: gene table doesn't look like raw counts; results are still comparable but check this")
-    genes = adata.var_names.astype(str)
-    for c in ["gene_symbols", "gene_name", "feature_name", "symbol"]:
-        if c in adata.var.columns:
-            genes = adata.var[c].astype(str).values
-            break
+    genes = readable_gene_names(adata, say)
     key = np.char.add(np.char.add(text(obs["sample_id"]), "|"), text(obs["cell_type_level_2"]))
     codes, groups = pd.factorize(key)
     groups = np.asarray(groups)
@@ -209,6 +246,11 @@ def main():
     var = logcpm.var(axis=0)
     keep = np.where(active)[0]
     keep = keep[np.argsort(-var[keep])][:N_GENES]
+    # always keep the CD8 panel genes, found by name in whichever column of the file holds gene names
+    panel_idx = np.where(np.isin(np.asarray(genes), PANEL_GENES))[0]
+    if len(panel_idx):
+        keep = np.unique(np.concatenate([keep, panel_idx]))
+        say(f"kept {len(panel_idx)} CD8 panel genes")
     wide = pd.DataFrame(logcpm[:, keep].astype("float32"), columns=pd.Index(genes[keep]).astype(str))
     wide = wide.loc[:, ~wide.columns.duplicated()]
     pd.concat([meta, wide], axis=1).to_parquet(f"{args.out}/pseudobulk.parquet", index=False)
