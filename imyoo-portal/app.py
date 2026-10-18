@@ -1610,8 +1610,19 @@ elif page == "Sid cluster bridge":
                 fig.update_layout(height=max(360, min(680, 220 + 26 * len(effects))),
                                   coloraxis_colorbar=dict(title="Change"))
                 chart(fig)
-                st.dataframe(effects[["program", "before", "after", "change", "95% CI low", "95% CI high", "draws before", "draws after"]]
-                             .sort_values("change", ascending=False).round(2), hide_index=True, width="stretch")
+                effect_display = effects[["program", "before", "after", "change", "95% CI low", "95% CI high", "draws before", "draws after"]].rename(columns={
+                    "program": "Cluster program",
+                    "before": "Mean score before split",
+                    "after": "Mean score after split",
+                    "change": "Change (after − before)",
+                    "95% CI low": "95% CI lower bound",
+                    "95% CI high": "95% CI upper bound",
+                    "draws before": "Draws before split",
+                    "draws after": "Draws after split",
+                })
+                st.caption("Scores are standardized within Sid's cell group. The confidence interval shows uncertainty in the estimated change from the available draws; it is not a clinical significance test.")
+                st.dataframe(effect_display.sort_values("Change (after − before)", ascending=False).round(2),
+                             hide_index=True, width="stretch")
                 st.download_button("Download program effect table (CSV)", effects.to_csv(index=False).encode("utf-8"),
                                    file_name=f"sid_cluster_effects_{selected_type.replace(' ', '_')}.csv",
                                    mime="text/csv", key="sid_bridge_effects_download")
