@@ -11,6 +11,7 @@ Built for the [SPC Bio-Data Hackathon](https://www.southparkcommons.com/bio-data
 | `.streamlit/config.toml` | The look (font, colours, rounded corners), hides the developer toolbar, reloads when files change | SageMaker or laptop |
 | `sid_inspect.py` | Prints the structure of Sid Sijbrandij's public files (catalogue + blood single-cell file) | SageMaker |
 | `sid_precompute.py` | Labels groups of Sid's blood cells (T-cell receptors + a model taught on ImYoo's cells + marker genes) and summarises his T-cell families over time | SageMaker |
+| `sid_pseudobulk.py` | Gene activity per blood draw and cell family for Sid (reuses the group labels; no model re-run), for comparing IBD with cancer | SageMaker |
 | `make_demo_data.py` | Makes **made-up** data in the same shape, for trying the portal anywhere | anywhere |
 
 ## Run it in SageMaker on the real data
@@ -72,6 +73,9 @@ A yellow banner says "DEMO MODE: made-up numbers". The Flare Analyst needs AWS a
 - **Sid's journey**: Sid Sijbrandij's openly shared osteosarcoma data. His blood collection is almost all T cells,
   so the page follows his T-cell families across ten blood draws and compares families before and after a chosen
   date, such as his tumour surgery.
+- **Compare conditions**: IBD vs cancer. How genes change during IBD flares compared with how Sid's genes change
+  after vs before a date (default: his tumour surgery), plus Crohn's vs ulcerative colitis. Compares *changes*, not raw
+  levels, so differences between people and lab kits largely cancel out; similarity = correlation of changes.
 - **Cell map**: every kind of immune cell as islands of dots; lasso a group to see what's in it.
 - **Genes**: which genes switch on or off during a flare inside each cell type.
 - **How we checked**: junk removed, lab batches, freezer time, steroids, correction for testing many things, and
@@ -88,6 +92,7 @@ aws s3 cp s3://sid-sijbrandij-osteosarc-dataset/catalog/ ~/data/sid/catalog/ --r
 aws s3 cp s3://sid-sijbrandij-osteosarc-dataset/hudson_lab/PBMC_scRNAseq/seurat_objects/combined_seurat_object_20260323.h5ad ~/data/sid/ --region us-west-2 --no-sign-request
 aws s3 cp s3://sid-sijbrandij-osteosarc-dataset/hudson_lab/PBMC_scRNAseq/cellranger/2026-02-13/2026-02-13_capture1/outs/multi/count/raw_feature_bc_matrix/features.tsv.gz ~/data/sid/ --region us-west-2 --no-sign-request
 cd ~/imyoo-portal && python sid_precompute.py
+python sid_pseudobulk.py   # gene activity per draw, for 'Compare conditions' (~5 minutes)
 ```
 It also needs the ImYoo file in `~/data/` (it learns cell types from it) and takes about 7 minutes. The gene table
 (`features.tsv.gz`) lets it match gene names between the two files. Output goes to `data/sid/`; the portal picks it up.

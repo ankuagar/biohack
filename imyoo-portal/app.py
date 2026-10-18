@@ -55,7 +55,7 @@ st.set_page_config(page_title="ImYoo Flare Explorer", page_icon="🩸", layout="
 
 PAGES = {"Home": "🏠", "The study": "🗓️", "A person's journey": "👤", "Flare signature": "📊",
          "Seeing a flare coming": "🔮", "Ask the Flare Analyst": "💬", "My immune report": "📋",
-         "Sid's journey": "🦴",
+         "Sid's journey": "🦴", "Compare conditions": "🔀",
          "Cell map": "🗺️", "Genes": "🧬", "How we checked": "✅"}
 
 CSS = """
@@ -206,6 +206,11 @@ def _read_sid(folder, built_at):
     d = {n: pd.read_parquet(f"{folder}/{n}.parquet")
          for n in ["draws", "composition", "cells_map", "clones", "tcell_diversity", "markers", "events"]}
     d["groups"] = pd.read_parquet(f"{folder}/groups.parquet") if os.path.exists(f"{folder}/groups.parquet") else None
+    for extra in ["pseudobulk", "gene_names"]:  # made by sid_pseudobulk.py (optional)
+        f = f"{folder}/{extra}.parquet"
+        d[extra] = pd.read_parquet(f) if os.path.exists(f) else None
+    if d["pseudobulk"] is not None:
+        d["pseudobulk"]["date"] = pd.to_datetime(d["pseudobulk"]["date"])
     with open(f"{folder}/info.json") as f:
         d["info"] = json.load(f)
     for n in ["draws", "composition", "cells_map", "clones", "tcell_diversity"]:
@@ -402,6 +407,82 @@ def personal_family_deltas():
             if others:
                 delta.iloc[i] = X.values[i] - X.values[others].mean(axis=0)
     return X, delta, pd.DataFrame(normal).T, delta[calm]
+
+
+DISEASES = [("Crohn's", "Crohn"), ("Ulcerative colitis", "Ulcerative")]
+
+
+@st.cache_data
+def flare_gene_changes(cell_type, disease_pattern=None):
+    """Per gene: average change during a flare, each person vs their own calm samples (log2 units).
+
+    disease_pattern: text the disease label must contain (e.g. "Crohn"), or None for all bowel-disease people.
+    """
+    pb = D["pseudobulk"]
+    pb = pb[pb["cell_type"] == cell_type]
+    genes = [c for c in pb.columns if c not in ("sample_id", "cell_type", "n_cells")]
+    s = D["samples"][D["samples"]["group"] == "Bowel disease"]
+    if disease_pattern:
+        s = s[s["disease"].str.contains(disease_pattern, case=False, regex=False)]
+    m = pb.merge(s[["sample_id", "person", "flare"]], on="sample_id")
+    per = m.groupby(["person", "flare"])[genes].mean()
+    if per.empty or "Baseline" not in per.index.get_level_values(1) or "Flaring" not in per.index.get_level_values(1):
+        return pd.DataFrame()
+    base, fl = per.xs("Baseline", level="flare"), per.xs("Flaring", level="flare")
+    people = base.index.intersection(fl.index)
+    if len(people) < 3:
+        return pd.DataFrame()
+    diff = fl.loc[people] - base.loc[people]
+    return pd.DataFrame({"change": diff.mean(), "people_up": (diff > 0).sum(), "people": len(people),
+                         "activity": ((fl.loc[people] + base.loc[people]) / 2).mean()})
+
+
+def classify(a, b, size=0.5):
+    """Plain-language agreement between two gene changes (log2 units; 0.5 = about 1.4-fold)."""
+    up_a, up_b, dn_a, dn_b = a > size, b > size, a < -size, b < -size
+    return np.select([up_a & up_b, dn_a & dn_b, (up_a & dn_b) | (dn_a & up_b), up_a | dn_a, up_b | dn_b],
+                     ["Up in both", "Down in both", "Opposite directions", "First only", "Second only"],
+                     default="Little change")
+
+
+COMPARE_COLORS = {"Up in both": FLARE, "Down in both": FINE, "Opposite directions": "#8e44ad",
+                  "First only": "#f2c14e", "Second only": "#3fb8a6", "Little change": GREY}
+
+
+def compare_scatter(df, xname, yname, xlab, ylab, size=0.5):
+    """Scatter of two sets of gene changes. Similarity is measured on genes that clearly change in at least one
+    condition (genes that barely move only add noise); the all-genes value is returned too."""
+    from scipy.stats import spearmanr
+    moving = df[(df["x"].abs() > size) | (df["y"].abs() > size)]
+    rho_all = spearmanr(df["x"], df["y"]).correlation if len(df) > 3 else float("nan")
+    use_moving = len(moving) >= 8
+    rho = spearmanr(moving["x"], moving["y"]).correlation if use_moving else rho_all
+    df = df.assign(pattern=classify(df["x"], df["y"], size))
+    df.attrs.update(rho_all=rho_all, n_moving=len(moving),
+                    basis=f"the {len(moving)} genes that clearly change in at least one" if use_moving
+                    else f"all {len(df)} genes (too few change clearly)")
+    df["pattern"] = df["pattern"].replace({"First only": f"{xname} only", "Second only": f"{yname} only"})
+    colors = {**COMPARE_COLORS, f"{xname} only": COMPARE_COLORS["First only"],
+              f"{yname} only": COMPARE_COLORS["Second only"]}
+    fig = px.scatter(df.reset_index(), x="x", y="y", color="pattern", hover_name="gene", render_mode="webgl",
+                     color_discrete_map=colors, labels={"x": xlab, "y": ylab, "pattern": ""})
+    fig.update_traces(marker=dict(size=5, opacity=0.7))
+    fig.add_hline(y=0, line_color=GREY, line_width=1)
+    fig.add_vline(x=0, line_color=GREY, line_width=1)
+    fig.update_layout(height=520)
+    return fig, rho, df
+
+
+def similarity_words(rho):
+    if rho != rho:
+        return "not enough genes to compare"
+    if rho > 0.5:
+        return "strongly similar"
+    if rho > 0.2:
+        return "somewhat similar"
+    if rho > -0.2:
+        return "largely unrelated"
+    return "opposite patterns"
 
 
 def countdown(scored):
@@ -1255,6 +1336,123 @@ elif page == "Sid's journey":
                 "- **A T-cell-focused collection:** the overall cell mix can't be read as changes in his blood.\n"
                 "- **Treatment dates aren't in the data**, so changes can't be tied to specific treatments, only "
                 "placed relative to his tumour sampling dates.")
+
+elif page == "Compare conditions":
+    header("IBD vs cancer: do their immune changes look alike?",
+           "We compare **how genes change** rather than raw gene levels. A change is measured within the same person "
+           "(and the same lab kit), so differences between people and kits largely cancel out.")
+    st.caption("Changes are in log2 units: +1 means about twice as active, −1 about half. Exploratory: few people "
+               "per group, so read patterns, not single genes.")
+    pb_types = sorted(D["pseudobulk"]["cell_type"].unique())
+
+    st.subheader("1. Bowel-disease flares vs Sid's cancer journey")
+    st.markdown("Do immune cells change in a similar way during an **IBD flare** (Crohn's, ulcerative colitis) and across **Sid's osteosarcoma treatment**? For Sid, the change is his blood draws after vs before a chosen date.")
+    SD = load_sid()
+    if SD is None or SD.get("pseudobulk") is None:
+        st.info("Sid's gene summaries aren't built yet. In SageMaker run `python sid_pseudobulk.py` (after "
+                "`sid_precompute.py`), then refresh.")
+        SD = None
+    def sid_vs_ibd():
+        sp, events = SD["pseudobulk"], SD["events"]
+        sid_types = sorted(sp["cell_type"].unique())
+        c1, c2, c3 = st.columns(3)
+        sid_ct = c1.selectbox("Sid's cell family", sid_types,
+                              index=sid_types.index("T Cells") if "T Cells" in sid_types else 0)
+        t_like = [c for c in pb_types if family_of(c) == family_of(sid_ct)] or pb_types
+        ibd_ct = c2.selectbox("Compare with IBD cell type", t_like, key="cmp_ibd_ct")
+        start, end = sp["date"].min(), sp["date"].max()
+        in_range = events[(events["date"] > start) & (events["date"] < end)]
+        split_opts = {f"{r['label']} ({r['date']:%Y-%m-%d})": r["date"] for _, r in in_range.iterrows()}
+        split_opts["Halfway through his draws"] = start + (end - start) / 2
+        surgery = next((i for i, k in enumerate(split_opts) if "resection" in k.lower() or "surgery" in k.lower()),
+                       len(split_opts) - 1)
+        split_name = c3.selectbox("Sid: compare draws after vs before", list(split_opts), index=surgery)
+        split = split_opts[split_name]
+        one = sp[sp["cell_type"] == sid_ct]
+        genes_sid = [g for g in one.columns if g not in ("date", "cell_type", "n_cells")]
+        before, after = one[one["date"] < split], one[one["date"] > split]
+        ibd = flare_gene_changes(ibd_ct)
+        if before.empty or after.empty or ibd.empty:
+            st.info("Need Sid's blood draws on both sides of that date, and IBD patients with both kinds of sample.")
+            return
+        sid_change = after[genes_sid].mean() - before[genes_sid].mean()
+        # match gene names: ImYoo may use gene names or gene codes
+        names = SD.get("gene_names")
+        overlap_names = len(set(sid_change.index) & set(ibd.index))
+        if names is not None and "code" in names and overlap_names < 500:
+            code_of = dict(zip(names["name"], names["code"]))
+            sid_change.index = [code_of.get(g, g) for g in sid_change.index]
+            sid_change = sid_change[~sid_change.index.duplicated()]
+        shared = ibd.index.intersection(sid_change.index)
+        if len(shared) < 20:
+            st.warning(f"Only {len(shared)} genes could be matched between the two studies.")
+            return
+        ibd_s = ibd.loc[shared]
+        keep = ibd_s["activity"] >= ibd_s["activity"].quantile(0.25)
+        df = pd.DataFrame({"x": ibd_s.loc[keep, "change"], "y": sid_change.loc[shared][keep.values]})
+        df.index.name = "gene"
+        fig, rho, df = compare_scatter(df, "IBD flare", "Sid", f"Change during IBD flares ({ibd_ct})",
+                                       f"Sid's change after vs before ({sid_ct})")
+        c = st.columns(3)
+        c[0].metric("Similarity", f"{rho:+.2f}",
+                    help=f"Spearman correlation of changes in the {df.attrs['n_moving']} genes that clearly change in at "
+                         f"least one condition (+1 same pattern, 0 unrelated, −1 opposite). All genes: "
+                         f"{df.attrs['rho_all']:+.2f}.")
+        c[1].metric("Sid's draws", f"{before['date'].nunique()} before · {after['date'].nunique()} after")
+        c[2].metric("Genes compared", f"{len(df):,}")
+        st.markdown(f"Sid's **{sid_ct}** change around *{split_name}* and the change in **{ibd_ct}** during IBD flares "
+                    f"are **{similarity_words(rho)}** (similarity {rho:+.2f}, based on {df.attrs['basis']}).")
+        chart(fig)
+        cols = st.columns(2)
+        for col, (title, pats) in zip(cols, [("Moving the same way", ["Up in both", "Down in both"]),
+                                             ("Moving in opposite directions", ["Opposite directions"])]):
+            sel = df[df["pattern"].isin(pats)]
+            top = sel.assign(order=(sel["x"].abs() + sel["y"].abs())).sort_values("order", ascending=False).head(15)
+            col.markdown(f"**{title}** ({len(sel)} genes)")
+            col.dataframe(top[["x", "y"]].rename(columns={"x": "IBD flare", "y": "Sid"}).round(2), width="stretch")
+
+    if SD is not None:
+        sid_vs_ibd()
+
+    st.subheader("2. Inside IBD: Crohn's vs ulcerative colitis")
+    default_ct = next((c for c in pb_types if "B Cell" in c and "Naive" in c), next((c for c in pb_types if "B Cell" in c), pb_types[0]))
+    ct = st.selectbox("Cell type", pb_types, index=pb_types.index(default_ct), key="cmp_ct")
+    cd, uc = flare_gene_changes(ct, "Crohn"), flare_gene_changes(ct, "Ulcerative")
+    if cd.empty or uc.empty:
+        st.info("Not enough Crohn's or ulcerative colitis patients with both kinds of sample for this cell type.")
+    else:
+        both = cd.join(uc, lsuffix="_cd", rsuffix="_uc", how="inner")
+        both = both[both["activity_cd"] >= both["activity_cd"].quantile(0.25)]  # skip barely measured genes
+        df = pd.DataFrame({"x": both["change_cd"], "y": both["change_uc"]})
+        df.index.name = "gene"
+        fig, rho, df = compare_scatter(df, "Crohn's", "UC", "Change during flare in Crohn's patients",
+                                       "Change during flare in ulcerative colitis patients")
+        c = st.columns(3)
+        c[0].metric("Similarity of the two diseases' flares", f"{rho:+.2f}",
+                    help=f"Spearman correlation of changes in the {df.attrs['n_moving']} genes that clearly change in at "
+                         f"least one disease (+1 identical pattern, 0 unrelated, −1 opposite). All genes: "
+                         f"{df.attrs['rho_all']:+.2f}.")
+        c[1].metric("People compared", f"{int(cd['people'].iloc[0])} Crohn's · {int(uc['people'].iloc[0])} UC")
+        c[2].metric("Genes compared", f"{len(df):,}")
+        st.markdown(f"In **{ct}**, Crohn's and ulcerative colitis flares are **{similarity_words(rho)}** "
+                    f"(similarity {rho:+.2f}, based on {df.attrs['basis']}).")
+        chart(fig)
+        st.caption("Each dot is a gene. Top-right: more active during flares in both diseases. Yellow/teal: changes "
+                   "in one disease only. Purple: opposite directions.")
+        cols = st.columns(3)
+        for col, (title, mask, sort) in zip(cols, [
+                ("Shared flare genes", df["pattern"].isin(["Up in both", "Down in both"]), (df["x"] + df["y"]).abs()),
+                ("Crohn's only", df["pattern"] == "Crohn's only", df["x"].abs()),
+                ("Ulcerative colitis only", df["pattern"] == "UC only", df["y"].abs())]):
+            top = df[mask].assign(order=sort[mask]).sort_values("order", ascending=False).head(12)
+            col.markdown(f"**{title}** ({int(mask.sum())} genes)")
+            col.dataframe(top[["x", "y"]].rename(columns={"x": "Crohn's", "y": "UC"}).round(2), width="stretch")
+
+    st.subheader("⚠️ Keep in mind")
+    st.markdown("- **Sid is one person** with a different disease (bone cancer), treatment and lab kit; this is a "
+                "pattern comparison, not a finding.\n"
+                "- His 'change' is draws after vs before a date, not flare vs calm; treatment dates aren't in the data.\n"
+                "- IBD here means Crohn's disease and ulcerative colitis; within IBD, each disease group is small.")
 
 elif page == "Cell map":
     header("A map of every kind of immune cell")
